@@ -658,9 +658,14 @@ function pctOf(key,val){
   return o[val]/total*100;
 }
 function rollTraits(seed,locks){
-  const r=mulberry32(hashSeed(seed+"|traits"));
+  /* Each trait rolls from its own stream, keyed by its name. With one shared
+     stream a locked trait consumed no draw, so every trait listed after it
+     shifted along — locking the fill silently re-rolled the ground. */
   const t={};
-  for(const k in TRAITS) t[k]=locks[k]&&locks[k]!=="auto" ? locks[k] : pick(TRAITS[k].opts,r());
+  for(const k in TRAITS)
+    t[k]=locks[k]&&locks[k]!=="auto"
+      ? locks[k]
+      : pick(TRAITS[k].opts, mulberry32(hashSeed(seed+"|trait:"+k))());
   return t;
 }
 
