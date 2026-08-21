@@ -138,7 +138,6 @@
         <button data-view="bench" aria-pressed="true">Bench</button>
         <button data-view="plate" aria-pressed="false">Plate</button>
         <button data-view="traits" aria-pressed="false">Traits</button>
-        <button data-view="rotations" aria-pressed="false">Rotations</button>
       </div>
       <div class="spacer"></div>
       <div class="seedbox">
@@ -700,12 +699,18 @@ function buildPlant(traits,seed,pose){
   const stem=stemCurve(rosette?"erect":traits.habit,rnd,72).map(p=>vmul(p,H));
   if(!(rosette&&traits.form==="foliage"))add([stem],null,0,"stem");
 
-  /* thorns ride the stem */
+  /* Thorns ride the stem, alternating sides. The old test was i%14 with i
+     stepping by 7 from 8, which never lands on zero — so every thorn went the
+     same way. Count them instead of testing the index. */
   if(traits.quirk==="thorns"){
-    for(let i=8;i<stem.length-4;i+=7){
+    const tr=S("thorns");
+    let k=0;
+    for(let i=8;i<stem.length-4;i+=7,k++){
       const f=frameAt(stem,i);
-      const dir=vnorm(vadd(vmul(f.N,(i%14?1:-1)),vmul(f.T,0.5)));
-      add([[f.P,vadd(f.P,vmul(dir,0.055))]],null,0,"thorn"+i);
+      const side=k%2?1:-1;
+      const dir=vnorm(vadd(vmul(f.N,side*0.95),
+                      vadd(vmul(f.B,side*(tr()*0.5-0.25)),vmul(f.T,0.42+tr()*0.22))));
+      add([[f.P,vadd(f.P,vmul(dir,0.048+tr()*0.022))]],null,0,"thorn"+k);
     }
   }
 
@@ -1139,7 +1144,7 @@ const PRESETS={
   "graphite HB":{spacing:1.1,density:8,minThickness:0.5,maxThickness:2.6,noiseFreq:0.009,minRadius:0.22,maxRadius:0.85,alpha:0.26,toneJitter:16,snapAmount:0.35,snapPx:3,wobble:3.4,wobbleFreq:1.1,passes:2,taper:0.45,overshoot:6},
   "soft 4B":{spacing:1.0,density:13,minThickness:0.9,maxThickness:4.2,noiseFreq:0.007,minRadius:0.28,maxRadius:1.05,alpha:0.20,toneJitter:20,snapAmount:0.4,snapPx:3,wobble:4.2,wobbleFreq:0.85,passes:2,taper:0.4,overshoot:8},
   "charcoal":{spacing:1.5,density:20,minThickness:2.2,maxThickness:8.5,noiseFreq:0.005,minRadius:0.35,maxRadius:1.5,alpha:0.13,toneJitter:24,snapAmount:0.55,snapPx:4,wobble:5.4,wobbleFreq:0.6,passes:2,taper:0.35,overshoot:10},
-  "ink nib":{spacing:0.85,density:6,minThickness:0.5,maxThickness:1.9,noiseFreq:0.013,minRadius:0.28,maxRadius:0.72,alpha:0.5,toneJitter:9,snapAmount:0.1,snapPx:2,wobble:2.4,wobbleFreq:1.5,passes:2,taper:0.3,overshoot:5},
+  "ink nib":{spacing:0.85,density:6,minThickness:0.5,maxThickness:1.9,noiseFreq:0.013,minRadius:0.28,maxRadius:0.72,alpha:0.38,toneJitter:9,snapAmount:0.1,snapPx:2,wobble:2.4,wobbleFreq:1.5,passes:2,taper:0.3,overshoot:5},
   "dry marker":{spacing:1.7,density:15,minThickness:3.0,maxThickness:6.0,noiseFreq:0.009,minRadius:0.9,maxRadius:2.0,alpha:0.24,toneJitter:12,snapAmount:0.25,snapPx:3,wobble:3.0,wobbleFreq:1.0,passes:2,taper:0.12,overshoot:7},
   "chalk":{spacing:1.5,density:22,minThickness:2.6,maxThickness:7.0,noiseFreq:0.004,minRadius:0.4,maxRadius:1.3,alpha:0.11,toneJitter:28,snapAmount:0.5,snapPx:3,wobble:4.6,wobbleFreq:0.7,passes:2,taper:0.3,overshoot:9}
 };
@@ -1468,7 +1473,6 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef,seed){
 /* One progressive grid renderer, shared by Plate and Traits. The paper is drawn
    once for the whole sheet so cells have no seams, and specimens are laid down a
    few per frame — a full sheet is heavy enough to lock the page in one go. */
-  
 let gridToken=0, gridCells=[];
 function renderGrid(items,cfg){
   const token=++gridToken;
@@ -1605,20 +1609,9 @@ function render(){
   const rgb=INKS[state.ink][1];
   const dotsRef={n:0};
 
-  if(state.view==="bench"){
-    const parts=buildPlant(traits,state.seed,state.pose);
-    drawSpecimen(vctx,traits,parts,state.pose,
-      {cx:LOGICAL*0.5,cy:LOGICAL*0.5,w:LOGICAL*0.74,h:LOGICAL*0.80,zoom:state.pose.zoom},rgb,dotsRef);
-  } else {
-    const angles=[-1.2,-0.6,-0.2,0.2,0.6,1.2];
-    const cols=3,cw=LOGICAL/cols,ch=LOGICAL/2;
-    angles.forEach((yaw,i)=>{
-      const pose={...state.pose,yaw};
-      const parts=buildPlant(traits,state.seed,pose);
-      drawSpecimen(vctx,traits,parts,pose,
-        {cx:(i%cols)*cw+cw/2,cy:Math.floor(i/cols)*ch+ch/2,w:cw*0.74,h:ch*0.76,zoom:state.pose.zoom},rgb,dotsRef);
-    });
-  }
+  const parts=buildPlant(traits,state.seed,state.pose);
+  drawSpecimen(vctx,traits,parts,state.pose,
+    {cx:LOGICAL*0.5,cy:LOGICAL*0.5,w:LOGICAL*0.74,h:LOGICAL*0.80,zoom:state.pose.zoom},rgb,dotsRef);
 
   drawReadout(traits);
   const ms=performance.now()-t0, heavy=dotsRef.n>420000;
