@@ -380,15 +380,16 @@ function cubic3(p0,p1,p2,p3,steps){
 
 /* Where the camera sits, expressed back in model space. Geometry needs this to
    keep blades from turning edge-on and vanishing. */
-function viewDirModel(pose){
+function invView(pose,X,Y,Z){
   const cr=Math.cos(pose.roll),sr=Math.sin(pose.roll);
   const cy=Math.cos(pose.yaw),sy=Math.sin(pose.yaw);
   const cp=Math.cos(pose.pitch),sp=Math.sin(pose.pitch);
-  const Y=0,Z=1;
   const y1=Y*cp+Z*sp, z2=-Y*sp+Z*cp;
-  const x1=0*cy-z2*sy, z=0*sy+z2*cy;
+  const x1=X*cy-z2*sy, z=X*sy+z2*cy;
   return vnorm(V(x1*cr+y1*sr, -x1*sr+y1*cr, z));
 }
+const viewDirModel   = pose=>invView(pose,0,0,1);   /* into the screen */
+const screenRightModel = pose=>invView(pose,1,0,0); /* across the screen */
 
 /* Camera. Rotation happens about the plant's waist so it spins in place. */
 function makeCam(pose,S,cx,cy){
@@ -410,13 +411,13 @@ function makeCam(pose,S,cx,cy){
 
 /* Leaf blades as half-width profiles in unit space (v: 0 base → 1 tip). */
 const BLADE={
-  lance:  t=>0.30*Math.pow(t,0.55)*Math.pow(1-t,1.5)*2.9,
-  ovate:  t=>0.52*Math.pow(t,0.85)*Math.pow(1-t,0.85)*4.0,
-  heart:  t=>(0.50*Math.pow(t,0.5)*Math.pow(1-t,1.0)*3.1)*(1+0.55*Math.exp(-Math.pow(t/0.16,2))),
-  needle: t=>0.11*Math.pow(t,0.4)*Math.pow(1-t,0.9)*2.2,
-  lobed:  t=>0.46*Math.pow(t,0.8)*Math.pow(1-t,0.8)*3.9*(1+0.30*Math.sin(t*Math.PI*4.5)),
-  round:  t=>0.62*Math.sqrt(Math.max(0,t*(1-t)))*2.05,
-  strap:  t=>0.20*Math.pow(Math.sin(Math.PI*Math.min(1,t*1.35)),0.28)
+  lance:  t=>0.175*Math.pow(t,0.55)*Math.pow(1-t,1.5)*2.9,
+  ovate:  t=>0.310*Math.pow(t,0.85)*Math.pow(1-t,0.85)*4.0,
+  heart:  t=>0.330*Math.pow(t,0.34)*Math.pow(1-t,1.02)*2.35,
+  needle: t=>0.070*Math.pow(t,0.4)*Math.pow(1-t,0.9)*2.2,
+  lobed:  t=>0.285*Math.pow(t,0.8)*Math.pow(1-t,0.8)*3.9*(1+0.28*Math.sin(t*Math.PI*4.5)),
+  round:  t=>0.440*Math.sqrt(Math.max(0,t*(1-t)))*2.05,
+  strap:  t=>0.125*Math.pow(Math.sin(Math.PI*Math.min(1,t*1.35)),0.28)
 };
 function bladeOutline(kind,rnd,steps){
   const w=BLADE[kind]||BLADE.ovate;
@@ -445,13 +446,30 @@ function faceCamera(up,side,nrm,view,blend){
   return vnorm(vsub(vmul(side,c),vmul(nrm,s2)));
 }
 
+/* A grass blade or a fern rachis is a centreline with width, not an outline drawn
+   in a flat plane. Offset perpendicular to the local tangent, in the screen plane,
+   so the blade always presents its face. */
+function taperedRibbon(curve,across,hw){
+  const n=curve.length,R=[],L=[];
+  for(let i=0;i<n;i++){
+    const a=curve[Math.max(0,i-1)],b=curve[Math.min(n-1,i+1)];
+    const T=vnorm(vsub(b,a));
+    let p=vsub(across,vmul(T,across.x*T.x+across.y*T.y+across.z*T.z));
+    if(vlen(p)<1e-4)p=vnorm(vcross(T,V(0,0,1)));else p=vnorm(p);
+    const w=hw(i/(n-1));
+    R.push(vadd(curve[i],vmul(p,w)));
+    L.push(vsub(curve[i],vmul(p,w)));
+  }
+  return R.concat(L.reverse());
+}
+
 /* Stem skeletons per habit. y is up, base at origin, height ~1. */
 function stemCurve(habit,rnd,steps){
   const j=()=>(rnd()*2-1);
   const zc=0.16;
   switch(habit){
     case "arching":
-      return cubic3(V(0,0,0),V(0.06*j(),0.48,zc*j()),V(0.34,0.94,zc*j()),V(0.60,0.80,0.10*j()),steps);
+      return cubic3(V(0,0,0),V(0.04*j(),0.52,zc*0.6*j()),V(0.20,0.98,zc*0.6*j()),V(0.42,0.88,0.08*j()),steps);
     case "creeping":
       return cubic3(V(0,0,0),V(0.24,0.26,zc*j()),V(0.62,0.34,zc*j()),V(0.92,0.22,0.12*j()),steps);
     case "rosette":
@@ -464,8 +482,9 @@ function stemCurve(habit,rnd,steps){
       }
       return out;
     }
+    case "clump":
     default: /* erect */
-      return cubic3(V(0,0,0),V(0.10*j(),0.34,zc*j()),V(0.12*j(),0.70,zc*j()),V(0.09*j(),1.0,0.06*j()),steps);
+      return cubic3(V(0,0,0),V(0.045*j(),0.34,zc*0.5*j()),V(0.055*j(),0.70,zc*0.5*j()),V(0.05*j(),1.0,0.04*j()),steps);
   }
 }
 function frameAt(curve,i){
@@ -479,7 +498,7 @@ function frameAt(curve,i){
 
 /* Flower heads. Each returns {rings:[outline2d], petals:[outline2d], disc:r} in the flower plane. */
 function flowerHead(kind,petals,rnd){
-  const out={petals:[],rings:[],rays:[],disc:0};
+  const out={petals:[],rings:[],rays:[],arcs:[],disc:0};
   const petal=(len,wid,shape)=>{
     const o=[];
     for(let i=0;i<=18;i++){const t=i/18;o.push({u:wid*shape(t),v:t*len});}
@@ -490,10 +509,18 @@ function flowerHead(kind,petals,rnd){
   const drop =t=>Math.pow(t,0.5)*Math.pow(1-t,0.75)*2.6;
   switch(kind){
     case "daisy":{
-      out.disc=0.16;
+      out.disc=0.085;
+      const blade=t=>Math.pow(t,0.85)*Math.pow(1-t,0.40)*2.60;   /* widest at ~0.68 */
+      const gaps=[];let sum=0;
+      for(let i=0;i<petals;i++){const g=0.62+rnd()*0.76;gaps.push(g);sum+=g;}
+      let a=rnd()*Math.PI*2;
       for(let i=0;i<petals;i++){
-        const a=i/petals*Math.PI*2+rnd()*0.08;
-        out.petals.push({a,pts:petal(0.46+rnd()*0.10,0.085,drop),r0:0.15});
+        out.petals.push({a,pts:petal(0.38+rnd()*0.18,0.150+rnd()*0.030,blade),r0:0.045});
+        a+=gaps[i]/sum*Math.PI*2;
+      }
+      for(let i=0;i<9;i++){                                       /* stippled centre */
+        const t=rnd()*Math.PI*2,r=Math.sqrt(rnd())*0.055;
+        out.rings.push({r:0.011,cy:Math.sin(t)*r,ax:Math.cos(t)*r,squash:1});
       }
       break;}
     case "globe":{
@@ -511,11 +538,19 @@ function flowerHead(kind,petals,rnd){
       out.rings.push({r:0.19,cy:-0.44,squash:0.34});
       break;}
     case "trumpet":{
-      const o=[];
-      for(let i=0;i<=22;i++){const t=i/22;o.push({u:0.05+0.24*Math.pow(t,2.1),v:t*0.5});}
-      for(let i=22;i>=0;i--){const t=i/22;o.push({u:-(0.05+0.24*Math.pow(t,2.1)),v:t*0.5});}
+      const o=[], prof=t=>0.032+0.052*t+0.235*Math.pow(Math.max(0,(t-0.52)/0.48),2.1);
+      const R=prof(1), lip=0.56, lobes=5;
+      for(let i=0;i<=20;i++){const t=i/20;o.push({u:prof(t),v:t*lip});}
+      for(let i=1;i<lobes*4;i++){
+        const t=i/(lobes*4);
+        o.push({u:R*(1-2*t), v:lip-0.075*Math.sin(Math.PI*t)+0.022*Math.sin(t*Math.PI*lobes)});
+      }
+      for(let i=20;i>=0;i--){const t=i/20;o.push({u:-prof(t),v:t*lip});}
       out.petals.push({a:0,pts:o,r0:0});
-      out.rings.push({r:0.29,cy:0.5,squash:0.30});
+      /* far rim, arcing the other way */
+      const back=[];
+      for(let i=0;i<=14;i++){const t=i/14;back.push({u:R*(1-2*t)*0.94, v:lip+0.055*Math.sin(Math.PI*t)});}
+      out.arcs=[back];
       break;}
     case "spike":{
       const n=5+Math.floor(rnd()*4);
@@ -545,13 +580,15 @@ function flowerHead(kind,petals,rnd){
 
 /* ══════════════ 6. TRAITS ══════════════ */
 const TRAITS={
-  habit:      {label:"habit",   opts:{erect:34,arching:24,rosette:16,creeping:14,climbing:12}},
+  form:       {label:"form",    opts:{bloom:30,foliage:17,berries:14,seedhead:12,grass:11,buds:9,fern:7}},
+  habit:      {label:"habit",   opts:{erect:28,clump:22,arching:18,rosette:12,creeping:11,climbing:9}},
   stem:       {label:"stem",    opts:{single:52,branched:32,bifid:16}},
   leaf:       {label:"leaf",    opts:{ovate:20,lance:20,heart:12,needle:12,lobed:12,round:12,strap:12}},
   phyllotaxy: {label:"set",     opts:{alternate:34,opposite:28,whorled:20,basal:18}},
   density:    {label:"density", opts:{normal:42,sparse:30,dense:28}},
-  venation:   {label:"veins",   opts:{midrib:34,none:30,pinnate:22,palmate:14}},
+  venation:   {label:"veins",   opts:{none:62,midrib:22,pinnate:10,palmate:6}},
   flower:     {label:"head",    opts:{daisy:22,globe:14,bell:14,spike:14,cluster:14,umbel:12,trumpet:10}},
+  arrangement:{label:"borne",   opts:{solitary:34,spray:26,raceme:22,corymb:18}},
   petals:     {label:"count",   opts:{"five":24,"six":20,"eight":18,"twelve":16,"many":12,"three":10}},
   fill:       {label:"fill",    opts:{none:34,hatch:22,scribble:16,stipple:16,solid:12}},
   colour:     {label:"colour",  opts:{accent:40,none:30,full:30}},
@@ -560,12 +597,12 @@ const TRAITS={
   quirk:      {label:"quirk",   opts:{none:46,tendrils:12,lean:12,bitten:10,dropped:10,thorns:10}}
 };
 const GROUPS={
-  structure:["habit","stem","ground"],
+  structure:["form","habit","stem","ground"],
   foliage:["leaf","phyllotaxy","density","venation"],
-  flower:["flower","petals"],
+  flower:["flower","arrangement","petals"],
   treatment:["fill","colour","palette","quirk"]
 };
-const PETAL_N={three:3,five:5,six:6,eight:8,twelve:12,many:18};
+const PETAL_N={three:3,five:5,six:6,eight:8,twelve:12,many:15};
 
 const PALETTES={
   sand:  [[196,166,124],[214,192,158],[168,140,104]],
@@ -597,9 +634,11 @@ function rollTraits(seed,locks){
 }
 
 /* ══════════════ 7. BUILD THE SPECIMEN ══════════════ */
+const tipI=c=>c.length-1;
 function buildPlant(traits,seed,pose){
   const rnd=mulberry32(hashSeed(seed+"|geo"));
   const view=viewDirModel(pose);
+  const across=screenRightModel(pose);
   const parts=[];                       /* {paths:[[v3]], fill:[v3]|null, tone:0..2} */
   const add=(paths,fill,tone)=>parts.push({paths,fill:fill||null,tone:tone||0});
 
@@ -616,110 +655,272 @@ function buildPlant(traits,seed,pose){
     }
   }
 
-  const nodeCount={sparse:4,normal:6,dense:9}[traits.density];
-  const perNode={alternate:1,opposite:2,whorled:3,basal:1}[traits.phyllotaxy];
-  const azStep={alternate:2.399,opposite:1.571,whorled:1.047,basal:1.6}[traits.phyllotaxy];
+  const form=traits.form;
 
-  const leafNodes=[];
-  for(let i=0;i<nodeCount;i++){
-    const u=traits.phyllotaxy==="basal"
-      ? 0.03+i*0.035
-      : 0.20+(i/(nodeCount-1||1))*0.62;
-    leafNodes.push(Math.round(u*(stem.length-1)));
-  }
-
-  const bladeSteps=traits.leaf==="lobed"?46:30;
-  let az=rnd()*Math.PI*2;
-  leafNodes.forEach((idx,ni)=>{
-    const f=frameAt(stem,idx);
-    const shrink=traits.phyllotaxy==="basal"?1:(1-ni/(nodeCount+2)*0.55);
-    for(let k=0;k<perNode;k++){
-      const a=az+k*(Math.PI*2/perNode);
-      const outward=vnorm(vadd(vmul(f.N,Math.cos(a)),vmul(f.B,Math.sin(a))));
-      const elev=traits.phyllotaxy==="basal"?0.95:(0.42+rnd()*0.42);
-      const up=vnorm(vadd(vmul(outward,Math.cos(elev)),vmul(f.T,Math.sin(elev))));
-      /* blade normal tilted up, so leaves read face-on rather than edge-on */
-      const nrm=vnorm(vsub(vmul(f.T,Math.cos(elev)),vmul(outward,Math.sin(elev))));
-      const side=faceCamera(up,vnorm(vcross(up,nrm)),nrm,view,0.62);
-      const len=(0.33+rnd()*0.13)*shrink*H*(traits.leaf==="needle"?1.3:1);
-
-      let outline=bladeOutline(traits.leaf,rnd,bladeSteps);
-      if(traits.quirk==="bitten"&&ni===1&&k===0){
-        outline=outline.map((q,qi)=>
-          (qi>bladeSteps*0.30&&qi<bladeSteps*0.52)?{u:q.u*0.42,v:q.v}:q);
+  if(form==="grass"||form==="fern"){
+    parts.length=0;                                  /* these do not use the main axis */
+    if(form==="grass"){
+      const n=5+Math.floor(rnd()*4);
+      for(let i=0;i<n;i++){
+        const u=(i/(n-1||1))*2-1, out=u*(0.22+rnd()*0.20), h=(0.55+rnd()*0.45)*H;
+        const c=cubic3(V(0,0,0),V(out*0.25,h*0.52,(rnd()*2-1)*0.05),
+                       V(out*0.85,h*0.94,(rnd()*2-1)*0.05),
+                       V(out*1.5,h*0.80,(rnd()*2-1)*0.04),40);
+        add([taperedRibbon(c,across,t=>0.016*Math.pow(1-t,0.75)*(1-t*0.2))],null,1);
       }
-      const blade=bladeTo3D(outline,f.P,up,side,len);
-      const petiole=[f.P,vadd(f.P,vmul(up,len*0.09))];
-      const paths=[blade,petiole];
-
-      /* venation */
-      if(traits.venation==="midrib"||traits.venation==="pinnate"){
-        paths.push([vadd(f.P,vmul(up,len*0.06)),vadd(f.P,vmul(up,len*0.92))]);
-      }
-      if(traits.venation==="pinnate"){
-        for(let v=1;v<=3;v++){
-          const t=0.25+v*0.19, hw=(BLADE[traits.leaf]||BLADE.ovate)(t)*len*0.78;
-          const o=vadd(f.P,vmul(up,t*len));
-          paths.push([o,vadd(vadd(o,vmul(side,hw)),vmul(up,len*0.10))]);
-          paths.push([o,vadd(vadd(o,vmul(side,-hw)),vmul(up,len*0.10))]);
+      const stalks=1+Math.floor(rnd()*2);
+      for(let i=0;i<stalks;i++){
+        const lean=(rnd()*2-1)*0.10, h=(0.86+rnd()*0.16)*H;
+        const c=cubic3(V(0,0,0),V(lean*0.4,h*0.4,0),V(lean*0.8,h*0.75,0),V(lean,h,0),34);
+        add([c],null,0);
+        const top=c[c.length-1], T=vnorm(vsub(top,c[c.length-6]));
+        const pl=cubic3(top,vadd(top,vmul(T,0.06*H)),vadd(top,vmul(T,0.13*H)),vadd(top,vmul(T,0.19*H)),18);
+        add([taperedRibbon(pl,across,t=>0.020*Math.sin(Math.PI*Math.min(1,t*1.15+0.06)))],
+            taperedRibbon(pl,across,t=>0.020*Math.sin(Math.PI*Math.min(1,t*1.15+0.06))),2);
+        for(let b=0;b<14;b++){                        /* awns off the spikelet */
+          const t=0.12+rnd()*0.85, sd=b%2?1:-1;
+          const p0=pl[Math.round(t*(pl.length-1))];
+          add([[p0,vadd(vadd(p0,vmul(across,sd*(0.020+rnd()*0.022))),vmul(T,0.020+rnd()*0.020))]],null,0);
         }
       }
-      if(traits.venation==="palmate"){
-        for(let v=-2;v<=2;v++){
-          if(!v)continue;
-          const o=vadd(f.P,vmul(up,len*0.08));
-          paths.push([o,vadd(vadd(o,vmul(side,v*0.16*len)),vmul(up,len*0.72))]);
+    } else {
+      const nf=1+Math.floor(rnd()*2);
+      for(let fi=0;fi<nf;fi++){
+        const lean=(fi===0?0:(fi%2?1:-1)*0.22), h=(0.78+rnd()*0.22)*H;
+        const rach=cubic3(V(0,0,0),V(lean*0.3,h*0.36,(rnd()*2-1)*0.04),
+                          V(lean*0.85,h*0.72,(rnd()*2-1)*0.04),V(lean*1.2,h,0),56);
+        add([rach],null,0);
+        const np=9+Math.floor(rnd()*5);
+        for(let i=0;i<np;i++){
+          const t=0.14+(i/(np-1))*0.82, idx=Math.round(t*(rach.length-1));
+          const f=frameAt(rach,idx);
+          const env=Math.sin(Math.PI*Math.pow(t,0.72))*(1-t*0.25);
+          const len=(0.10+rnd()*0.045)*H*env;
+          if(len<0.012)continue;
+          for(const sd of [-1,1]){
+            let p=vsub(across,vmul(f.T,across.x*f.T.x+across.y*f.T.y+across.z*f.T.z));
+            p=vlen(p)<1e-4?f.N:vnorm(p);
+            const up=vnorm(vadd(vmul(p,sd*0.86),vmul(f.T,0.5)));
+            const sideV=vnorm(vcross(up,vnorm(vcross(p,f.T))));
+            const bl=bladeTo3D(bladeOutline("lance",rnd,20),f.P,up,sideV,len);
+            add([bl],bl,1);
+          }
         }
-      }
-      add(paths,blade,1);
-      if(traits.quirk==="tendrils"&&k===0&&ni%2===0){
-        const t0=vadd(f.P,vmul(up,len*0.5));
-        const coil=[];
-        for(let s=0;s<=26;s++){
-          const t=s/26,ang=t*Math.PI*4.2;
-          coil.push(vadd(t0,vadd(vmul(side,Math.cos(ang)*0.045*t+0.10*t),vmul(up,Math.sin(ang)*0.045*t+0.14*t))));
-        }
-        add([coil],null,0);
       }
     }
-    az+=azStep;
+  } else {
+
+  /* Composition layer. Phyllotaxy alone puts blades wherever the spiral lands,
+     including straight across the stem and straight at the camera, which is what
+     turned the specimens into knots. Blades are now thrown to screen-left and
+     screen-right of the axis, with only enough tilt left to keep the pose reading,
+     and anything that would land on top of an existing blade is shrunk or dropped. */
+  const leafy=form==="foliage";
+  const nodeCount=leafy?{sparse:4,normal:6,dense:8}[traits.density]
+                       :{sparse:2,normal:3,dense:4}[traits.density];
+  const perNode={alternate:1,opposite:2,whorled:3,basal:1}[traits.phyllotaxy];
+  const bladeSteps=traits.leaf==="lobed"?46:30;
+  const basal=traits.phyllotaxy==="basal";
+
+  const slots=[];
+  if(basal){
+    const n=4+Math.floor(rnd()*3);
+    for(let i=0;i<n;i++){
+      const u=(i/(n-1||1))*2-1;                       /* fan across the base */
+      slots.push({idx:Math.round((0.02+rnd()*0.05)*tipI(stem)),
+                  side:u<0?-1:1, spread:u*0.85, elev:0.30+Math.abs(u)*0.55, shrink:1-Math.abs(u)*0.22});
+    }
+  } else {
+    for(let i=0;i<nodeCount;i++){
+      const idx=Math.round(((leafy?0.10:0.05)+(i/(nodeCount-1||1))*(leafy?0.80:0.30))*tipI(stem));
+      const shrink=1-i/(nodeCount+1.6)*0.55;
+      if(perNode===1) slots.push({idx,side:i%2?1:-1,spread:(rnd()*2-1)*0.30,elev:0.92+rnd()*0.34,shrink});
+      else if(perNode===2){
+        slots.push({idx,side:-1,spread:(rnd()*2-1)*0.24,elev:0.90+rnd()*0.32,shrink});
+        slots.push({idx,side: 1,spread:(rnd()*2-1)*0.24,elev:0.90+rnd()*0.32,shrink});
+      } else {
+        [[-1,-0.42],[1,0.0],[-1,0.46]].forEach(([sd,sp],k)=>
+          slots.push({idx,side:sd,spread:sp+(rnd()*2-1)*0.16,elev:0.84+k*0.12+rnd()*0.18,shrink}));
+      }
+    }
+  }
+
+  const placed=[];
+  slots.forEach((sl,ni)=>{
+    const f=frameAt(stem,sl.idx);
+    /* azimuth measured from the camera's across-axis, so blades never point at us */
+    const a0=Math.atan2(across.x*f.B.x+across.y*f.B.y+across.z*f.B.z,
+                        across.x*f.N.x+across.y*f.N.y+across.z*f.N.z);
+    const a=a0+(sl.side<0?Math.PI:0)+sl.spread;
+    const outward=vnorm(vadd(vmul(f.N,Math.cos(a)),vmul(f.B,Math.sin(a))));
+    const up=vnorm(vadd(vmul(outward,Math.cos(sl.elev)),vmul(f.T,Math.sin(sl.elev))));
+    const nrm=vnorm(vsub(vmul(f.T,Math.cos(sl.elev)),vmul(outward,Math.sin(sl.elev))));
+    const side=faceCamera(up,vnorm(vcross(up,nrm)),nrm,view,0.62);
+
+    let len=(0.20+rnd()*0.13)*sl.shrink*H*(traits.leaf==="needle"?1.45:traits.leaf==="strap"?1.5:1);
+    let org,cen;
+    let tries=0;
+    for(;;){
+      org=vadd(f.P,vmul(up,len*(basal?0.10:0.26)));
+      cen=vadd(org,vmul(up,len*0.5));
+      const r=len*0.40;
+      const clash=placed.some(p=>vlen(vsub(cen,p.c))<(r+p.r)*0.70);
+      if(!clash){placed.push({c:cen,r});break;}
+      if(++tries>2)return;                              /* no room — leave it out */
+      len*=0.66;
+    }
+
+    let outline=bladeOutline(traits.leaf,rnd,bladeSteps);
+    if(traits.quirk==="bitten"&&ni===1){
+      outline=outline.map((q,qi)=>
+        (qi>bladeSteps*0.30&&qi<bladeSteps*0.52)?{u:q.u*0.42,v:q.v}:q);
+    }
+    const blade=bladeTo3D(outline,org,up,side,len);
+    const paths=[blade,[f.P,org]];
+
+    if(traits.venation!=="none"){
+      paths.push([vadd(org,vmul(up,len*0.06)),vadd(org,vmul(up,len*0.90))]);
+      if(traits.venation==="pinnate"){
+        for(let v=1;v<=2;v++){
+          const t=0.34+v*0.22, hw=(BLADE[traits.leaf]||BLADE.ovate)(t)*len*0.72;
+          const c=vadd(org,vmul(up,t*len));
+          paths.push([c,vadd(vadd(c,vmul(side,hw)),vmul(up,len*0.09))]);
+          paths.push([c,vadd(vadd(c,vmul(side,-hw)),vmul(up,len*0.09))]);
+        }
+      } else if(traits.venation==="palmate"){
+        [-1,1].forEach(v=>{
+          const c=vadd(org,vmul(up,len*0.10));
+          paths.push([c,vadd(vadd(c,vmul(side,v*0.17*len)),vmul(up,len*0.66))]);
+        });
+      }
+    }
+    add(paths,blade,1);
+
+    if(traits.quirk==="tendrils"&&ni%2===0&&!basal){
+      const t0=vadd(org,vmul(up,len*0.5)),coil=[];
+      for(let q=0;q<=26;q++){
+        const t=q/26,ang=t*Math.PI*4.2;
+        coil.push(vadd(t0,vadd(vmul(side,Math.cos(ang)*0.045*t+0.10*t),vmul(up,Math.sin(ang)*0.045*t+0.14*t))));
+      }
+      add([coil],null,0);
+    }
   });
 
-  /* branch: a second, shorter axis with its own head */
-  const heads=[{idx:stem.length-1,scale:1}];
-  if(traits.stem!=="single"&&traits.habit!=="rosette"){
-    const bi=Math.round(stem.length*0.48);
+  const flowers=(form==="bloom"||form==="buds");
+
+  /* How the flowers are borne on the axis. A single big terminal head is the
+     childish default; real botanical doodles hang small florets off pedicels. */
+  const tip=stem.length-1, heads=[];
+  if(flowers){
+  const pedicel=(idx,outDir,L,scale)=>{
+    const f=frameAt(stem,idx);
+    const dir=vnorm(vadd(vmul(f.N,outDir.n),vadd(vmul(f.B,outDir.b),vmul(f.T,outDir.t))));
+    const end=vadd(f.P,vmul(dir,L));
+    add([cubic3(f.P,vadd(f.P,vmul(dir,L*0.45)),vadd(end,vmul(f.T,-L*0.30)),end,18)],null,0);
+    heads.push({pos:end,tan:dir,scale});
+  };
+  switch(traits.arrangement){
+    case "spray":{
+      const n=3+Math.floor(rnd()*3);
+      for(let i=0;i<n;i++){
+        const idx=Math.round((0.76+(i/(n-1||1))*0.22)*tip);
+        pedicel(idx,{n:(i%2?1:-1)*(0.6+rnd()*0.5),b:(rnd()*2-1)*0.5,t:1.15+rnd()*0.5},(0.035+rnd()*0.055)*H,0.52+rnd()*0.16);
+      }
+      heads.push({pos:stem[tip],tan:frameAt(stem,tip).T,scale:0.62});
+      break;}
+    case "raceme":{
+      const n=9+Math.floor(rnd()*6);
+      for(let i=0;i<n;i++){
+        const idx=Math.round((0.58+(i/(n-1))*0.40)*tip);
+        pedicel(idx,{n:(i%2?1:-1)*1.0,b:(rnd()*2-1)*0.25,t:0.75},(0.016+rnd()*0.022)*H,0.24+rnd()*0.09);
+      }
+      break;}
+    case "corymb":{
+      const base=Math.round(0.82*tip), n=4+Math.floor(rnd()*4);
+      for(let i=0;i<n;i++){
+        const a=(i/(n-1||1)-0.5)*1.25;
+        pedicel(base,{n:Math.sin(a)*0.95,b:(rnd()*2-1)*0.45,t:Math.cos(a)*1.35},(0.05+rnd()*0.06)*H,0.38+rnd()*0.12);
+      }
+      break;}
+    default:
+      heads.push({pos:stem[tip],tan:frameAt(stem,tip).T,scale:1});
+  }
+  if(traits.arrangement!=="solitary")
+    heads.forEach((h,i)=>{if(i<heads.length-1&&rnd()<0.28)h.bud=true;});
+  if(form==="buds")heads.forEach(h=>h.bud=true);
+  }
+
+  /* Berries: small round fruit on stubby stalks up the top half. */
+  if(form==="berries"){
+    const n=6+Math.floor(rnd()*7);
+    for(let i=0;i<n;i++){
+      const idx=Math.round((0.42+(i/(n-1))*0.56)*tip), f=frameAt(stem,idx), sd=i%2?1:-1;
+      let p=vsub(across,vmul(f.T,across.x*f.T.x+across.y*f.T.y+across.z*f.T.z));
+      p=vlen(p)<1e-4?f.N:vnorm(p);
+      const dir=vnorm(vadd(vmul(p,sd*0.9),vmul(f.T,0.75)));
+      const L=(0.030+rnd()*0.030)*H, c=vadd(f.P,vmul(dir,L)), r=(0.022+rnd()*0.014)*H;
+      add([[f.P,c]],null,0);
+      const ring=[],sv=vnorm(vcross(dir,view));
+      const uv=vnorm(vcross(sv,view));
+      for(let q=0;q<=26;q++){const a=q/26*Math.PI*2;ring.push(vadd(c,vadd(vmul(sv,Math.cos(a)*r),vmul(uv,Math.sin(a)*r))));}
+      add([ring],ring,2);
+    }
+  }
+
+  /* Seed head: a spindle of scales with bristles, no petals at all. */
+  if(form==="seedhead"){
+    const f=frameAt(stem,tip), T=f.T, base=stem[tip];
+    const L=(0.16+rnd()*0.09)*H;
+    const ax=cubic3(base,vadd(base,vmul(T,L*0.34)),vadd(base,vmul(T,L*0.68)),vadd(base,vmul(T,L)),24);
+    const sp=taperedRibbon(ax,across,t=>(0.030+rnd()*0.004)*Math.sin(Math.PI*Math.min(1,t*1.05+0.10)));
+    add([sp],sp,2);
+    for(let b=0;b<20;b++){
+      const t=0.18+rnd()*0.80, sd=b%2?1:-1;
+      const p0=ax[Math.round(t*(ax.length-1))];
+      add([[p0,vadd(vadd(p0,vmul(across,sd*(0.022+rnd()*0.028))),vmul(T,0.026+rnd()*0.030))]],null,0);
+    }
+  }
+
+  if(flowers&&traits.stem!=="single"&&traits.habit!=="rosette"){
+    const bi=Math.round(stem.length*0.74);
     const f=frameAt(stem,bi);
-    const dir=vnorm(vadd(vmul(f.N,0.7),vmul(f.T,0.9)));
-    const bEnd=vadd(f.P,vmul(dir,0.46*H));
+    const dir=vnorm(vadd(vmul(f.N,0.55),vmul(f.T,1.3)));
+    const bEnd=vadd(f.P,vmul(dir,0.22*H));
     const branch=cubic3(f.P,vadd(f.P,vmul(dir,0.18*H)),vadd(bEnd,vmul(f.N,-0.06)),bEnd,40);
     add([branch],null,0);
-    heads.push({idx:-1,pos:bEnd,tan:dir,scale:0.72});
+    heads.push({pos:bEnd,tan:dir,scale:traits.arrangement==="solitary"?0.72:0.45});
     if(traits.stem==="bifid"){
-      const dir2=vnorm(vadd(vmul(f.N,-0.6),vmul(f.T,1.0)));
-      const b2=vadd(f.P,vmul(dir2,0.36*H));
+      const dir2=vnorm(vadd(vmul(f.N,-0.5),vmul(f.T,1.45)));
+      const b2=vadd(f.P,vmul(dir2,0.17*H));
       add([cubic3(f.P,vadd(f.P,vmul(dir2,0.15*H)),vadd(b2,vmul(f.N,0.05)),b2,36)],null,0);
-      heads.push({idx:-1,pos:b2,tan:dir2,scale:0.58});
+      heads.push({pos:b2,tan:dir2,scale:traits.arrangement==="solitary"?0.58:0.38});
     }
   }
 
   /* flower heads */
   const petalN=PETAL_N[traits.petals];
   heads.forEach((h,hi)=>{
-    const pos=h.idx>=0?stem[h.idx]:h.pos;
-    const tan=h.idx>=0?frameAt(stem,h.idx).T:h.tan;
+    const pos=h.pos, tan=h.tan;
     /* face mostly toward the model's +Z so heads read frontally, but still rotate with the plant */
-    const nrm=vnorm(vadd(vmul(tan,0.32),V(0,0.10,0.90)));
+    const nrm=vnorm(vadd(vmul(tan,0.52),V(0,0.10,0.78)));
     let side=vcross(V(0,1,0),nrm);
     if(vlen(side)<0.05)side=vcross(V(1,0,0),nrm);
     side=vnorm(side);
     let up=vnorm(vcross(nrm,side));
-    side=faceCamera(up,side,nrm,view,0.85);
+    side=faceCamera(up,side,nrm,view,0.58);
     up=vnorm(vcross(vnorm(vcross(side,up)),side));
-    const S=(0.40+rnd()*0.07)*h.scale*H;
-    const head=flowerHead(traits.flower,petalN,rnd);
+    const S=(0.21+rnd()*0.06)*h.scale*H;
+    const head=h.bud?null:flowerHead(traits.flower,petalN,rnd);
     const to3=(u,v)=>vadd(pos,vadd(vmul(side,u*S),vmul(up,v*S)));
 
+    if(h.bud){                                   /* a closed teardrop, still on its way up */
+      const b=[];
+      const bw=t=>0.105*Math.pow(t,0.5)*Math.pow(1-t,0.62)*3.2;
+      for(let i=0;i<=15;i++){const t=i/15;b.push(to3( bw(t), t*0.66));}
+      for(let i=15;i>=0;i--){const t=i/15;b.push(to3(-bw(t), t*0.66));}
+      add([b],b,2);
+      return;
+    }
     if(head.disc>0){
       const ring=[];
       for(let i=0;i<=46;i++){const a=i/46*Math.PI*2;ring.push(to3(Math.cos(a)*head.disc,Math.sin(a)*head.disc));}
@@ -733,6 +934,7 @@ function buildPlant(traits,seed,pose){
       });
       add([pts],pts,2);
     });
+    (head.arcs||[]).forEach(a=>add([a.map(q=>to3(q.u,q.v))],null,0));
     head.rays.forEach(r=>{
       add([[to3(Math.cos(r.a)*r.r0,Math.sin(r.a)*r.r0),to3(Math.cos(r.a)*r.r1,Math.sin(r.a)*r.r1)]],null,0);
     });
@@ -752,6 +954,24 @@ function buildPlant(traits,seed,pose){
     }
   });
 
+  /* Sister axes rising from the same point — on the reference sheet this is as
+     common as the single stem, and it is what makes a specimen read as a plant
+     rather than a diagram of one. */
+  if(traits.habit==="clump"){
+    const term=flowers;
+    const n=1+Math.floor(rnd()*2);
+    for(let i=0;i<n;i++){
+      const lean=(i%2?1:-1)*(0.10+rnd()*0.10), hh=(0.66+rnd()*0.22)*H;
+      const sis=cubic3(V(0,0,0),V(lean*0.4,hh*0.34,(rnd()*2-1)*0.05),
+                       V(lean*0.9,hh*0.70,(rnd()*2-1)*0.05),V(lean*1.25,hh,(rnd()*2-1)*0.04),56);
+      add([sis],null,0);
+      if(term)heads.push({pos:sis[sis.length-1],
+                  tan:vnorm(vsub(sis[sis.length-1],sis[sis.length-6])),
+                  scale:0.62+rnd()*0.20, bud:form==="buds"||rnd()<0.22});
+    }
+  }
+
+  }
   /* ground treatment */
   if(traits.ground==="soil"){
     const line=[];
@@ -798,8 +1018,8 @@ const PAPER_PARAMS=[["tone","tone",0,100,1,""],["warmth","warmth",0,100,1,""],["
   ["mottle","mottle",0,30,1,""],["mottleScale","mottle scale",1,40,1,""],["fibers","fibres",0,600,10,""],["vignette","vignette",0,40,1,""]];
 
 const state={
-  view:"bench", seed:"4929", ink:0, scale:2, preset:"graphite HB",
-  brush:{...PRESETS["graphite HB"]},
+  view:"bench", seed:"4929", ink:0, scale:2, preset:"ink nib",
+  brush:{...PRESETS["ink nib"]},
   paper:{tone:70,warmth:80,grain:13,mottle:4,mottleScale:6,fibers:260,vignette:5},
   pose:{yaw:-0.22,pitch:0.06,roll:0.0,depth:0.30,zoom:1},
   locks:{}
@@ -1016,10 +1236,13 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
       for(let i=1;i<p.fill.length;i++)ctx.lineTo(p.fill[i].x,p.fill[i].y);
       ctx.closePath();ctx.clip();
       const o={...B,overshoot:0,passes:1};
-      const treat=(traits.fill==="solid"&&k<0.62)?"hatch":traits.fill;
-      if(k<0.62)o.alpha=Math.max(0.05,o.alpha*0.7);
+      /* below thumbnail size any interior treatment just fills the specimen in
+         solid black, so step it down and finally drop it altogether */
+      if(k<0.42)return;
+      const treat=(k<0.66&&traits.fill!=="stipple")?"hatch":traits.fill;
+      if(k<0.66)o.alpha=Math.max(0.04,o.alpha*0.45);
       if(treat==="hatch"){
-        const step=Math.max(5,(xe-xs)/9);
+        const step=Math.max(5,(xe-xs)/(k<0.66?5:9));
         for(let x=xs-(ye-ys);x<xe+(ye-ys);x+=step)
           dotsRef.n+=strokePath(ctx,[{x,y:ys},{x:x+(ye-ys),y:ye}],o,rnd,noise,rgb);
       } else if(treat==="scribble"){
@@ -1031,7 +1254,7 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
         dotsRef.n+=strokePath(ctx,pts,o,rnd,noise,rgb);
       } else if(treat==="stipple"){
         ctx.fillStyle=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},${Math.min(1,o.alpha*1.6)})`;
-        const n=Math.min(700,Math.round((xe-xs)*(ye-ys)/26));
+        const n=Math.min(700,Math.round((xe-xs)*(ye-ys)/(k<0.66?70:26)));
         for(let i=0;i<n;i++){
           const x=xs+rnd()*(xe-xs),y=ys+rnd()*(ye-ys),r=o.minRadius+rnd()*(o.maxRadius-o.minRadius);
           ctx.beginPath();ctx.arc(x,y,r,0,6.2831853);ctx.fill();dotsRef.n++;
