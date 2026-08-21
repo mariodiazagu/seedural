@@ -112,6 +112,11 @@
     <div class="sect"><h2>Flower</h2><div id="t_flower"></div></div>
     <div class="sect"><h2>Treatment</h2><div id="t_treatment"></div></div>
     <div class="sect">
+      <h2>Plate</h2><div id="g_plate"></div>
+      <p class="hint">Consecutive seeds from the one above, on one continuous sheet. Tap a specimen to open it.</p>
+    </div>
+
+    <div class="sect">
       <h2>Pose</h2><div id="g_pose"></div>
       <div class="btnrow" style="margin-top:10px"><button id="poseReset">Reset pose</button></div>
     </div>
@@ -122,6 +127,7 @@
     <div class="bar">
       <div class="tabs" id="tabs">
         <button data-view="bench" aria-pressed="true">Bench</button>
+        <button data-view="plate" aria-pressed="false">Plate</button>
         <button data-view="rotations" aria-pressed="false">Rotations</button>
       </div>
       <div class="spacer"></div>
@@ -689,6 +695,7 @@ function buildPlant(traits,seed,pose){
   }
 
   const form=traits.form;
+  let planTilt=0;
 
   if(form==="grass"||form==="fern"){
     parts.length=0;                                  /* these do not use the main axis */
@@ -764,13 +771,28 @@ function buildPlant(traits,seed,pose){
   const bladeSteps=traits.leaf==="lobed"?46:30;
   const basal=traits.phyllotaxy==="basal";
 
+  /* How fat is this blade, really? The clearance test used to assume every leaf
+     was long and thin, so a round one claimed far less room than it occupies. */
+  const prof=BLADE[traits.leaf]||BLADE.ovate;
+  let maxHW=0;
+  for(let i=1;i<40;i++)maxHW=Math.max(maxHW,prof(i/40));
+
+  /* A round blade seen edge-on is a circle, and circles round a point overlap no
+     matter how you space them. Real plates draw fat rosettes from above instead.
+     The fatter the leaf, the further the specimen tips toward a plan view. */
+  const fat=Math.max(0,Math.min(1,(maxHW-0.16)/0.30));
+  planTilt=rosette?fat*(form==="foliage"?0.95:0.58):0;
+  if(traits.ground==="pot"||traits.ground==="soil")planTilt=Math.min(planTilt,0.44);
+  const planView=planTilt>0.02;
+
   const slots=[];
   const sr=S("slots");
   const ROSETTE=rosette;
   const PHYLLO={alternate:2.3999,opposite:1.5708,whorled:1.0472,basal:0};
   let azM=sr()*Math.PI*2;
   if(ROSETTE||basal){
-    const n=ROSETTE?6+Math.floor(sr()*4):4+Math.floor(sr()*3);
+    const n=ROSETTE?Math.max(5,Math.min(11,Math.round(Math.PI*1.15/Math.atan(maxHW)+sr()*2-1)))
+                   :4+Math.floor(sr()*3);
     for(let i=0;i<n;i++){
       const az=azM+i*2.3999;                       /* golden-angle spiral */
       /* A leaf aimed at or away from the camera would project to nothing, so lift
@@ -778,7 +800,8 @@ function buildPlant(traits,seed,pose){
       const ov=Math.abs(Math.cos(az)*view.x+Math.sin(az)*view.z);
       slots.push({idx:Math.round((0.005+sr()*0.02)*tipI(stem)),
                   azModel:az, spread:0, rosette:ROSETTE,
-                  elev:(ROSETTE?0.40:0.34)+ov*0.52+sr()*0.16,
+                  elev:planView?Math.max(0.12,Math.min(0.55,0.95-planTilt))+sr()*0.12
+                        :((ROSETTE?0.40:0.34)+ov*0.52+sr()*0.16),
                   shrink:(ROSETTE?1.15:0.82)+sr()*0.22});
     }
   } else {
@@ -811,16 +834,17 @@ function buildPlant(traits,seed,pose){
     const nrm=vnorm(vsub(vmul(f.T,Math.cos(sl.elev)),vmul(outward,Math.sin(sl.elev))));
     const side=faceCamera(up,vnorm(vcross(up,nrm)),nrm,view,0.62);
 
-    const wide={round:0.60,heart:0.76,ovate:0.82,lobed:0.78,strap:1.15,lance:1.10,needle:1.25}[traits.leaf]||1;
+    /* a fat blade has to be shorter or the rosette closes into a flower shape */
+    const wide=Math.max(0.55,Math.min(1.35,0.30/maxHW));
     let len=(sl.rosette?(0.28+rnd()*0.14)*wide:0.20+rnd()*0.13)*sl.shrink*H*(traits.leaf==="needle"?1.45:traits.leaf==="strap"?1.5:1);
     let org,cen;
     let tries=0;
     for(;;){
       org=vadd(f.P,vmul(up,len*(basal?0.10:0.26)));
       cen=vadd(org,vmul(up,len*0.5));
-      const r=len*0.40;
-      const bite=sl.rosette?0.56+(1-wide)*0.55:0.70;    /* wide blades need more clearance */
-      const clash=placed.some(p=>vlen(vsub(cen,p.c))<(r+p.r)*bite);
+      const r=len*Math.max(0.40,maxHW*1.15);
+      if(sl.rosette){placed.push({c:cen,r});break;}   /* spacing is the spiral's job */
+      const clash=placed.some(p=>vlen(vsub(cen,p.c))<(r+p.r)*0.70);
       if(!clash){placed.push({c:cen,r});break;}
       if(++tries>2)return;                              /* no room — leave it out */
       len*=0.66;
@@ -1076,6 +1100,22 @@ function buildPlant(traits,seed,pose){
       }
     }
   }
+  if(planTilt>0.02){
+    const c=Math.cos(planTilt), si=Math.sin(planTilt);
+    const k=vnorm(V(across.x,0,across.z));            /* camera's horizontal */
+    const tip=v=>{
+      const kd=k.x*v.x+k.y*v.y+k.z*v.z, kc=vcross(k,v);
+      return V(v.x*c+kc.x*si+k.x*kd*(1-c),
+               v.y*c+kc.y*si+k.y*kd*(1-c),
+               v.z*c+kc.z*si+k.z*kd*(1-c));
+    };
+    parts.forEach(p=>{
+      if(String(p.key).startsWith("gnd"))return;    /* the pot stays on the table */
+      p.paths=p.paths.map(pa=>pa.map(tip));
+      if(p.fill)p.fill=p.fill.map(tip);
+    });
+  }
+
   return parts;
 }
 
@@ -1108,6 +1148,7 @@ const state={
   brush:{...PRESETS["ink nib"]},
   paper:{tone:70,warmth:80,grain:13,mottle:4,mottleScale:6,fibers:260,vignette:5},
   pose:{yaw:-0.22,pitch:0.06,roll:0.0,depth:0.30,zoom:1},
+  plate:{count:12,cols:4,captions:1,turn:0,vary:0.55},
   locks:{}
 };
 for(const k in TRAITS)state.locks[k]="auto";
@@ -1147,6 +1188,11 @@ const poseRefs=[
   makeSlider($("#g_pose"),"depth",()=>state.pose.depth,v=>state.pose.depth=v,0,1,0.02,""),
   makeSlider($("#g_pose"),"zoom",()=>state.pose.zoom,v=>state.pose.zoom=v,0.5,1.5,0.02,"×")
 ];
+makeSlider($("#g_plate"),"specimens",()=>state.plate.count,v=>state.plate.count=Math.round(v),4,30,1,"");
+makeSlider($("#g_plate"),"columns",()=>state.plate.cols,v=>state.plate.cols=Math.round(v),2,6,1,"");
+makeSlider($("#g_plate"),"size variation",()=>state.plate.vary,v=>state.plate.vary=v,0,1,0.05,"");
+makeSlider($("#g_plate"),"turn spread",()=>state.plate.turn,v=>state.plate.turn=v,0,1,0.05,"");
+makeSlider($("#g_plate"),"captions",()=>state.plate.captions,v=>state.plate.captions=Math.round(v),0,1,1,"");
 $("#poseReset").addEventListener("click",()=>{
   state.pose={yaw:-0.22,pitch:0.06,roll:0,depth:0.30,zoom:1};
   poseRefs.forEach(r=>r.sync());requestRender(false);
@@ -1241,30 +1287,52 @@ function requestRender(preview){
   pending=requestAnimationFrame(()=>{pending=null;render();});
 }
 
-function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
+function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef,seed){
+  seed=seed||state.seed;
   /* Same fix on the render side: colour, interior fill and ink each get a stream
      keyed to the part they belong to, so a brush tweak cannot reshuffle a
      neighbouring stroke and a palette change cannot disturb the linework. */
-  const RS=(...k)=>mulberry32(hashSeed(state.seed+"|"+k.join(":")));
-  const noise=makeNoise2D(mulberry32(hashSeed(state.seed+"|n")));
+  const RS=(...k)=>mulberry32(hashSeed(seed+"|"+k.join(":")));
+  const noise=makeNoise2D(mulberry32(hashSeed(seed+"|n")));
 
   /* Project at unit scale first, measure the silhouette, then fit it to the frame.
      Perspective here is scale-independent, so measuring once is exact. */
   const probe=makeCam(pose,1,0,0);
-  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;      /* the plant */
+  let gx0=Infinity,gx1=-Infinity,gy0=Infinity,gy1=-Infinity;  /* what it stands in */
   const proj=parts.map(p=>{
     const paths=p.paths.map(path=>path.map(probe));
     const fill=p.fill?p.fill.map(probe):null;
     let z=0,n=0;
+    const isG=String(p.key).startsWith("gnd");
     paths.forEach(path=>path.forEach(q=>{
-      if(q.x<x0)x0=q.x; if(q.x>x1)x1=q.x;
-      if(q.y<y0)y0=q.y; if(q.y>y1)y1=q.y;
+      if(isG){
+        if(q.x<gx0)gx0=q.x; if(q.x>gx1)gx1=q.x;
+        if(q.y<gy0)gy0=q.y; if(q.y>gy1)gy1=q.y;
+      } else {
+        if(q.x<x0)x0=q.x; if(q.x>x1)x1=q.x;
+        if(q.y<y0)y0=q.y; if(q.y>y1)y1=q.y;
+      }
     }));
     p.paths.forEach(path=>path.forEach(v=>{z+=v.z;n++;}));
     return {paths,fill,tone:p.tone,key:p.key,z:n?z/n:0};
   });
+  /* A wide soil line or a deep pot used to drive the whole frame and shrink the
+     specimen to nothing. Ground may push the edges out, but only so far. */
+  if(gx0<Infinity){
+    const pw=Math.max(1e-3,x1-x0), ph=Math.max(1e-3,y1-y0);
+    x0=Math.min(x0,Math.max(gx0,x0-pw*0.30)); x1=Math.max(x1,Math.min(gx1,x1+pw*0.30));
+    y0=Math.min(y0,Math.max(gy0,y0-ph*0.15)); y1=Math.max(y1,Math.min(gy1,y1+ph*0.45));
+  }
   const bw=Math.max(1e-3,x1-x0), bh=Math.max(1e-3,y1-y0);
-  const S=Math.min(box.w/bw,box.h/bh)*box.zoom;
+  /* Filling every cell makes a thin stem and a squat rosette the same height, so
+     a plate of uprights turns into a page of hairlines. Blend the cell-fit scale
+     toward the specimen's true size — the model is built at height ~1, so its own
+     bounding box already knows how big it ought to be. Clamped so nothing spills. */
+  const fit=Math.min(box.w/bw,box.h/bh);
+  const vary=box.vary||0;
+  const trueS=box.h/1.05;
+  const S=Math.min(fit,fit*Math.pow(trueS/fit,vary))*(box.zoom||1);
   const mx=(x0+x1)/2, my=(y0+y1)/2;
   const map=q=>({x:box.cx+(q.x-mx)*S, y:box.cy+(q.y-my)*S});
 
@@ -1365,7 +1433,77 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
   flat.forEach(p=>p.paths.forEach((path,j)=>{dotsRef.n+=strokePath(ctx,path,B,RS("ink",p.key,j),noise,rgb);}));
 }
 
+/* A plate is many specimens on ONE sheet — the paper is drawn once so there are
+   no seams between cells. Cells are drawn a few per frame: at 24 specimens the
+   whole plate is heavy enough to lock the page if done in one go. */
+let plateToken=0, plateCells=[];
+function renderPlate(){
+  const token=++plateToken;
+  const scale=previewMode?1:state.scale, W=LOGICAL*scale;
+  view.width=W;view.height=W;
+  vctx.setTransform(1,0,0,1,0,0);
+  vctx.drawImage(getPaper(W),0,0);
+  vctx.setTransform(scale,0,0,scale,0,0);
+
+  const n=state.plate.count, cols=Math.min(state.plate.cols,n), rows=Math.ceil(n/cols);
+  const cw=LOGICAL/cols, ch=LOGICAL/rows;
+  const capH=state.plate.captions?Math.min(16,ch*0.10):0;
+  const rgb=INKS[state.ink][1], base=+state.seed||0;
+  const dotsRef={n:0}, t0=performance.now();
+  plateCells=[];
+  let i=0;
+
+  const step=()=>{
+    if(token!==plateToken)return;                 /* a newer plate started */
+    const until=Math.min(n,i+(previewMode?6:2));
+    for(;i<until;i++){
+      const sd=String(base+i);
+      const cx=(i%cols)*cw, cy=Math.floor(i/cols)*ch;
+      plateCells.push({x:cx,y:cy,w:cw,h:ch,seed:sd});
+      const traits=rollTraits(sd,state.locks);
+      /* a little variation in bearing, so a plate does not read as a rubber stamp */
+      const spin=(mulberry32(hashSeed(sd+"|plate"))()*2-1)*state.plate.turn*1.3;
+      const pose={...state.pose,yaw:state.pose.yaw+spin};
+      drawSpecimen(vctx,traits,buildPlant(traits,sd,pose),pose,
+        {cx:cx+cw/2,cy:cy+(ch-capH)/2,w:cw*0.76,h:(ch-capH)*0.80,
+         zoom:state.pose.zoom,vary:state.plate.vary},
+        rgb,dotsRef,sd);
+      if(capH){
+        vctx.fillStyle=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},.45)`;
+        vctx.font=`${Math.max(7,Math.min(10,ch*0.055))}px ui-monospace,Menlo,monospace`;
+        vctx.textAlign="center";
+        vctx.fillText(sd,cx+cw/2,cy+ch-capH*0.35);
+        vctx.textAlign="left";
+      }
+    }
+    const done=i>=n;
+    $("#status").innerHTML=
+      `<span>PLATE <b>${esc(String(base))}\u2013${esc(String(base+n-1))}</b></span>`+
+      `<span>DOTS <b>${dotsRef.n.toLocaleString("en-US")}</b></span>`+
+      `<span>${(performance.now()-t0).toFixed(0)}<b> ms</b></span>`+
+      `<span>${done?(previewMode?"PREVIEW 1\u00d7":"FULL "+state.scale+"\u00d7"):("drawing "+i+"/"+n+"\u2026")}</span>`+
+      `<span>${esc(state.preset)}</span>`;
+    if(!done)requestAnimationFrame(step);
+  };
+  step();
+  drawReadout(rollTraits(state.seed,state.locks));
+}
+
+/* clicking a specimen opens it on the bench */
+view.addEventListener("click",e=>{
+  if(state.view!=="plate")return;
+  const r=view.getBoundingClientRect();
+  const x=(e.clientX-r.left)/r.width*LOGICAL, y=(e.clientY-r.top)/r.height*LOGICAL;
+  const hit=plateCells.find(c=>x>=c.x&&x<c.x+c.w&&y>=c.y&&y<c.y+c.h);
+  if(!hit)return;
+  state.view="bench";
+  [...$("#tabs").children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.view==="bench"));
+  setSeed(hit.seed);
+});
+
 function render(){
+  if(state.view==="plate"){renderPlate();return;}
+  plateToken++;
   const t0=performance.now();
   const scale=previewMode?1:state.scale, W=LOGICAL*scale;
   view.width=W;view.height=W;
