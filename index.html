@@ -497,6 +497,19 @@ function frameAt(curve,i){
 }
 
 /* Flower heads. Each returns {rings:[outline2d], petals:[outline2d], disc:r} in the flower plane. */
+/* A single small floret: a rounded lobe on its own little stalk axis, placed and
+   tilted in the flower plane. Spikes and globes are built from many of these. */
+function floret(w,l,steps){
+  const o=[],p=t=>w*Math.pow(t,0.5)*Math.pow(1-t,0.58)*3.0;
+  for(let i=0;i<=steps;i++){const t=i/steps;o.push({u:p(t),v:t*l});}
+  for(let i=steps;i>=0;i--){const t=i/steps;o.push({u:-p(t),v:t*l});}
+  return o;
+}
+function placeAt(pts,ang,cx,cy){
+  const c=Math.cos(ang),s=Math.sin(ang);
+  return pts.map(q=>({u:cx+q.u*c-q.v*s, v:cy+q.u*s+q.v*c}));
+}
+
 function flowerHead(kind,petals,rnd){
   const out={petals:[],rings:[],rays:[],arcs:[],disc:0};
   const petal=(len,wid,shape)=>{
@@ -524,10 +537,15 @@ function flowerHead(kind,petals,rnd){
       }
       break;}
     case "globe":{
-      out.disc=0.30;
-      for(let i=0;i<petals*2;i++){
-        const a=i/(petals*2)*Math.PI*2;
-        out.rays.push({a,r0:0.29,r1:0.29+0.10+rnd()*0.09});
+      /* an allium: a hollow sphere of florets, each on its own spoke from a small
+         centre — no solid disc, which is what made it a pompom */
+      const n=petals*2+4;
+      for(let i=0;i<n;i++){
+        const a=i/n*Math.PI*2+(rnd()*2-1)*0.10;
+        const r=0.27+rnd()*0.13;
+        out.rays.push({a,r0:0.035,r1:r});
+        out.petals.push({a:0,r0:0,
+          pts:placeAt(floret(0.038,0.105,8),a-Math.PI/2,Math.cos(a)*r,Math.sin(a)*r)});
       }
       break;}
     case "bell":{
@@ -553,10 +571,17 @@ function flowerHead(kind,petals,rnd){
       out.arcs=[back];
       break;}
     case "spike":{
-      const n=5+Math.floor(rnd()*4);
+      /* many small florets alternating up a bare axis, crowded low and thinning
+         to the tip — a spike is an inflorescence, not one long lumpy head */
+      const n=14+Math.floor(rnd()*8);
+      out.arcs=[[{u:0,v:0.0},{u:0,v:0.74}]];
       for(let i=0;i<n;i++){
-        const v=0.10+i*0.13, s=1-i*0.085;
-        out.petals.push({a:0,pts:petal(0.16*s,0.10*s,round).map(q=>({u:q.u,v:q.v+v})),r0:0});
+        const t=i/(n-1), sd=i%2?1:-1;
+        const v=0.05+t*0.66;
+        const sc=(1-t*0.62)*(0.45+0.55*Math.min(1,t*5));
+        const tilt=sd*(1.02+rnd()*0.30)-0.10;
+        out.petals.push({a:0,r0:0,
+          pts:placeAt(floret(0.052*sc+0.012,0.20*sc+0.045,10),tilt,sd*0.012,v)});
       }
       break;}
     case "umbel":{
@@ -646,9 +671,13 @@ function buildPlant(traits,seed,pose){
   const parts=[];                       /* {paths:[[v3]], fill:[v3]|null, tone:0..2} */
   const add=(paths,fill,tone,key)=>parts.push({paths,fill:fill||null,tone:tone||0,key:key||("p"+parts.length)});
 
-  const H=traits.habit==="rosette"?0.42:traits.habit==="creeping"?0.62:1;
-  const stem=stemCurve(traits.habit,rnd,72).map(p=>vmul(p,H));
-  add([stem],null,0,"stem");
+  const rosette=traits.habit==="rosette";
+  /* A rosette is not a short stem with leaves crowded on it — it is a radial
+     cluster at ground level, and when it flowers it sends up a bare scape. */
+  const H=rosette?(traits.form==="foliage"?0.42:0.95)
+                 :traits.habit==="creeping"?0.62:1;
+  const stem=stemCurve(rosette?"erect":traits.habit,rnd,72).map(p=>vmul(p,H));
+  if(!(rosette&&traits.form==="foliage"))add([stem],null,0,"stem");
 
   /* thorns ride the stem */
   if(traits.quirk==="thorns"){
@@ -702,18 +731,18 @@ function buildPlant(traits,seed,pose){
         const rach=cubic3(V(0,0,0),vadd(vmul(fd,0.3),V(0,h*0.36,0)),
                           vadd(vmul(fd,0.85),V(0,h*0.72,0)),vadd(vmul(fd,1.2),V(0,h,0)),56);
         add([rach],null,0);
-        const np=9+Math.floor(rnd()*5);
+        const np=8+Math.floor(rnd()*4);
         for(let i=0;i<np;i++){
           const rnd=S("pinna",fi,i);
           const t=0.14+(i/(np-1))*0.82, idx=Math.round(t*(rach.length-1));
           const f=frameAt(rach,idx);
-          const env=Math.sin(Math.PI*Math.pow(t,0.72))*(1-t*0.25);
-          const len=(0.10+rnd()*0.045)*H*env;
+          const env=Math.sin(Math.PI*Math.pow(t,0.60))*(1-t*0.42);
+          const len=(0.155+rnd()*0.055)*H*env;
           if(len<0.012)continue;
           for(const sd of [-1,1]){
             let p=vsub(across,vmul(f.T,across.x*f.T.x+across.y*f.T.y+across.z*f.T.z));
             p=vlen(p)<1e-4?f.N:vnorm(p);
-            const up=vnorm(vadd(vmul(p,sd*0.86),vmul(f.T,0.5)));
+            const up=vnorm(vadd(vmul(p,sd*0.95),vmul(f.T,0.58)));  /* swept toward the tip */
             const sideV=vnorm(vcross(up,vnorm(vcross(p,f.T))));
             const bl=bladeTo3D(bladeOutline("lance",rnd,20),f.P,up,sideV,len);
             add([bl],bl,1);
@@ -737,14 +766,20 @@ function buildPlant(traits,seed,pose){
 
   const slots=[];
   const sr=S("slots");
+  const ROSETTE=rosette;
   const PHYLLO={alternate:2.3999,opposite:1.5708,whorled:1.0472,basal:0};
   let azM=sr()*Math.PI*2;
-  if(basal){
-    const n=4+Math.floor(sr()*3);
+  if(ROSETTE||basal){
+    const n=ROSETTE?6+Math.floor(sr()*4):4+Math.floor(sr()*3);
     for(let i=0;i<n;i++){
-      slots.push({idx:Math.round((0.02+sr()*0.05)*tipI(stem)),
-                  azModel:(i/n)*Math.PI*2+azM+(sr()*2-1)*0.25,
-                  spread:0, elev:0.34+sr()*0.42, shrink:0.82+sr()*0.22});
+      const az=azM+i*2.3999;                       /* golden-angle spiral */
+      /* A leaf aimed at or away from the camera would project to nothing, so lift
+         it as it approaches the view axis. The fan stays readable from any yaw. */
+      const ov=Math.abs(Math.cos(az)*view.x+Math.sin(az)*view.z);
+      slots.push({idx:Math.round((0.005+sr()*0.02)*tipI(stem)),
+                  azModel:az, spread:0, rosette:ROSETTE,
+                  elev:(ROSETTE?0.40:0.34)+ov*0.52+sr()*0.16,
+                  shrink:(ROSETTE?1.15:0.82)+sr()*0.22});
     }
   } else {
     for(let i=0;i<nodeCount;i++){
@@ -770,20 +805,22 @@ function buildPlant(traits,seed,pose){
                         across.x*f.N.x+across.y*f.N.y+across.z*f.N.z);
     const wrap=d=>Math.atan2(Math.sin(d),Math.cos(d));
     const dA=wrap(a0-sl.azModel), dB=wrap(a0+Math.PI-sl.azModel);
-    const a=sl.azModel+0.55*(Math.abs(dA)<Math.abs(dB)?dA:dB)+sl.spread;
+    const a=sl.azModel+(sl.rosette?0.18:0.55)*(Math.abs(dA)<Math.abs(dB)?dA:dB)+sl.spread;
     const outward=vnorm(vadd(vmul(f.N,Math.cos(a)),vmul(f.B,Math.sin(a))));
     const up=vnorm(vadd(vmul(outward,Math.cos(sl.elev)),vmul(f.T,Math.sin(sl.elev))));
     const nrm=vnorm(vsub(vmul(f.T,Math.cos(sl.elev)),vmul(outward,Math.sin(sl.elev))));
     const side=faceCamera(up,vnorm(vcross(up,nrm)),nrm,view,0.62);
 
-    let len=(0.20+rnd()*0.13)*sl.shrink*H*(traits.leaf==="needle"?1.45:traits.leaf==="strap"?1.5:1);
+    const wide={round:0.60,heart:0.76,ovate:0.82,lobed:0.78,strap:1.15,lance:1.10,needle:1.25}[traits.leaf]||1;
+    let len=(sl.rosette?(0.28+rnd()*0.14)*wide:0.20+rnd()*0.13)*sl.shrink*H*(traits.leaf==="needle"?1.45:traits.leaf==="strap"?1.5:1);
     let org,cen;
     let tries=0;
     for(;;){
       org=vadd(f.P,vmul(up,len*(basal?0.10:0.26)));
       cen=vadd(org,vmul(up,len*0.5));
       const r=len*0.40;
-      const clash=placed.some(p=>vlen(vsub(cen,p.c))<(r+p.r)*0.70);
+      const bite=sl.rosette?0.56+(1-wide)*0.55:0.70;    /* wide blades need more clearance */
+      const clash=placed.some(p=>vlen(vsub(cen,p.c))<(r+p.r)*bite);
       if(!clash){placed.push({c:cen,r});break;}
       if(++tries>2)return;                              /* no room — leave it out */
       len*=0.66;
@@ -797,7 +834,7 @@ function buildPlant(traits,seed,pose){
     const blade=bladeTo3D(outline,org,up,side,len);
     const paths=[blade,[f.P,org]];
 
-    if(traits.venation!=="none"){
+    if(traits.venation!=="none"&&!sl.rosette){
       paths.push([vadd(org,vmul(up,len*0.06)),vadd(org,vmul(up,len*0.90))]);
       if(traits.venation==="pinnate"){
         for(let v=1;v<=2;v++){
@@ -932,7 +969,8 @@ function buildPlant(traits,seed,pose){
     let up=vnorm(vcross(nrm,side));
     side=faceCamera(up,side,nrm,view,0.58);
     up=vnorm(vcross(vnorm(vcross(side,up)),side));
-    const HS=(0.21+rnd()*0.06)*h.scale*H;
+    const KS={spike:1.55,cluster:1.15,umbel:1.15,globe:1.05}[traits.flower]||1;
+    const HS=(0.21+rnd()*0.06)*h.scale*H*KS;
     const head=h.bud?null:flowerHead(traits.flower,petalN,rnd);
     const to3=(u,v)=>vadd(pos,vadd(vmul(side,u*HS),vmul(up,v*HS)));
 
