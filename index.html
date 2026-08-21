@@ -112,6 +112,15 @@
     <div class="sect"><h2>Flower</h2><div id="t_flower"></div></div>
     <div class="sect"><h2>Treatment</h2><div id="t_treatment"></div></div>
     <div class="sect">
+      <h2>Catalogue</h2>
+      <div class="row">
+        <div class="rowhead"><label for="cat">show every</label></div>
+        <select id="cat"></select>
+      </div>
+      <p class="hint">Every variant of one trait, everything else held still. Tap one to lock it.</p>
+    </div>
+
+    <div class="sect">
       <h2>Plate</h2><div id="g_plate"></div>
       <p class="hint">Consecutive seeds from the one above, on one continuous sheet. Tap a specimen to open it.</p>
     </div>
@@ -128,6 +137,7 @@
       <div class="tabs" id="tabs">
         <button data-view="bench" aria-pressed="true">Bench</button>
         <button data-view="plate" aria-pressed="false">Plate</button>
+        <button data-view="traits" aria-pressed="false">Traits</button>
         <button data-view="rotations" aria-pressed="false">Rotations</button>
       </div>
       <div class="spacer"></div>
@@ -1154,6 +1164,7 @@ const state={
   paper:{tone:70,warmth:80,grain:13,mottle:4,mottleScale:6,fibers:260,vignette:5},
   pose:{yaw:-0.22,pitch:0.06,roll:0.0,depth:0.30,zoom:1},
   plate:{count:12,cols:4,captions:1,turn:0,vary:0.55},
+  catalogue:"leaf",
   locks:{}
 };
 for(const k in TRAITS)state.locks[k]="auto";
@@ -1193,6 +1204,19 @@ const poseRefs=[
   makeSlider($("#g_pose"),"depth",()=>state.pose.depth,v=>state.pose.depth=v,0,1,0.02,""),
   makeSlider($("#g_pose"),"zoom",()=>state.pose.zoom,v=>state.pose.zoom=v,0.5,1.5,0.02,"×")
 ];
+{
+  const cat=$("#cat");
+  cat.innerHTML=Object.keys(TRAITS).map(k=>`<option value="${k}">${TRAITS[k].label} (${Object.keys(TRAITS[k].opts).length})</option>`).join("");
+  cat.value=state.catalogue;
+  cat.addEventListener("change",()=>{
+    state.catalogue=cat.value;
+    if(state.view!=="traits"){
+      state.view="traits";
+      [...$("#tabs").children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.view==="traits"));
+    }
+    requestRender(false);
+  });
+}
 makeSlider($("#g_plate"),"specimens",()=>state.plate.count,v=>state.plate.count=Math.round(v),4,30,1,"");
 makeSlider($("#g_plate"),"columns",()=>state.plate.cols,v=>state.plate.cols=Math.round(v),2,6,1,"");
 makeSlider($("#g_plate"),"size variation",()=>state.plate.vary,v=>state.plate.vary=v,0,1,0.05,"");
@@ -1441,49 +1465,57 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef,seed){
 /* A plate is many specimens on ONE sheet — the paper is drawn once so there are
    no seams between cells. Cells are drawn a few per frame: at 24 specimens the
    whole plate is heavy enough to lock the page if done in one go. */
-let plateToken=0, plateCells=[];
-function renderPlate(){
-  const token=++plateToken;
+/* One progressive grid renderer, shared by Plate and Traits. The paper is drawn
+   once for the whole sheet so cells have no seams, and specimens are laid down a
+   few per frame — a full sheet is heavy enough to lock the page in one go. */
+  
+let gridToken=0, gridCells=[];
+function renderGrid(items,cfg){
+  const token=++gridToken;
   const scale=previewMode?1:state.scale, W=LOGICAL*scale;
   view.width=W;view.height=W;
   vctx.setTransform(1,0,0,1,0,0);
   vctx.drawImage(getPaper(W),0,0);
   vctx.setTransform(scale,0,0,scale,0,0);
 
-  const n=state.plate.count, cols=Math.min(state.plate.cols,n), rows=Math.ceil(n/cols);
+  const n=items.length, cols=Math.max(1,Math.min(cfg.cols,n)), rows=Math.ceil(n/cols);
   const cw=LOGICAL/cols, ch=LOGICAL/rows;
-  const capH=state.plate.captions?Math.min(16,ch*0.10):0;
-  const rgb=INKS[state.ink][1], base=+state.seed||0;
+  const capH=cfg.captions?Math.min(24,ch*0.15):0;
+  const rgb=INKS[state.ink][1];
   const dotsRef={n:0}, t0=performance.now();
-  plateCells=[];
+  gridCells=[];
   let i=0;
 
   const step=()=>{
-    if(token!==plateToken)return;                 /* a newer plate started */
+    if(token!==gridToken)return;                 /* a newer sheet started */
     const until=Math.min(n,i+(previewMode?6:2));
     for(;i<until;i++){
-      const sd=String(base+i);
+      const it=items[i];
       const cx=(i%cols)*cw, cy=Math.floor(i/cols)*ch;
-      plateCells.push({x:cx,y:cy,w:cw,h:ch,seed:sd});
-      const traits=rollTraits(sd,state.locks);
-      /* a little variation in bearing, so a plate does not read as a rubber stamp */
-      const spin=(mulberry32(hashSeed(sd+"|plate"))()*2-1)*state.plate.turn*1.3;
+      gridCells.push({x:cx,y:cy,w:cw,h:ch,item:it});
+      const spin=(mulberry32(hashSeed(it.seed+"|grid"))()*2-1)*(cfg.turn||0)*1.3;
       const pose={...state.pose,yaw:state.pose.yaw+spin};
-      drawSpecimen(vctx,traits,buildPlant(traits,sd,pose),pose,
+      drawSpecimen(vctx,it.traits,buildPlant(it.traits,it.seed,pose),pose,
         {cx:cx+cw/2,cy:cy+(ch-capH)/2,w:cw*0.76,h:(ch-capH)*0.80,
-         zoom:state.pose.zoom,vary:state.plate.vary},
-        rgb,dotsRef,sd);
-      if(capH){
-        vctx.fillStyle=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},.45)`;
-        vctx.font=`${Math.max(7,Math.min(10,ch*0.055))}px ui-monospace,Menlo,monospace`;
+         zoom:state.pose.zoom,vary:cfg.vary||0},
+        rgb,dotsRef,it.seed);
+      if(capH&&it.label){
+        const fs=Math.max(7,Math.min(11,ch*0.062));
         vctx.textAlign="center";
-        vctx.fillText(sd,cx+cw/2,cy+ch-capH*0.35);
+        vctx.fillStyle=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},.62)`;
+        vctx.font=`${fs}px ui-monospace,Menlo,monospace`;
+        vctx.fillText(it.label,cx+cw/2,cy+ch-capH*0.80);
+        if(it.sub){
+          vctx.fillStyle=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},.34)`;
+          vctx.font=`${fs*0.85}px ui-monospace,Menlo,monospace`;
+          vctx.fillText(it.sub,cx+cw/2,cy+ch-capH*0.34);
+        }
         vctx.textAlign="left";
       }
     }
     const done=i>=n;
     $("#status").innerHTML=
-      `<span>PLATE <b>${esc(String(base))}\u2013${esc(String(base+n-1))}</b></span>`+
+      `<span>${esc(cfg.title)}</span>`+
       `<span>DOTS <b>${dotsRef.n.toLocaleString("en-US")}</b></span>`+
       `<span>${(performance.now()-t0).toFixed(0)}<b> ms</b></span>`+
       `<span>${done?(previewMode?"PREVIEW 1\u00d7":"FULL "+state.scale+"\u00d7"):("drawing "+i+"/"+n+"\u2026")}</span>`+
@@ -1491,24 +1523,77 @@ function renderPlate(){
     if(!done)requestAnimationFrame(step);
   };
   step();
+}
+
+function renderPlate(){
+  const base=+state.seed||0, n=state.plate.count;
+  const items=[];
+  for(let i=0;i<n;i++){
+    const sd=String(base+i);
+    items.push({seed:sd,traits:rollTraits(sd,state.locks),
+                label:state.plate.captions?sd:""});
+  }
+  renderGrid(items,{cols:state.plate.cols,captions:state.plate.captions,
+                    vary:state.plate.vary,turn:state.plate.turn,
+                    title:`PLATE <b>${esc(String(base))}\u2013${esc(String(base+n-1))}</b>`});
   drawReadout(rollTraits(state.seed,state.locks));
 }
 
-/* clicking a specimen opens it on the bench */
+/* Every variant of one trait, with everything else held still — so you can see
+   what that trait alone actually does, rather than guessing from random rolls. */
+/* A trait can only be seen if the plant has the part it applies to. Showing the
+   flower catalogue on a foliage specimen gives seven identical drawings, so the
+   catalogue quietly supplies whatever the trait needs to be visible at all. */
+const CAT_NEEDS={
+  flower:{form:"bloom"}, arrangement:{form:"bloom"}, petals:{form:"bloom"},
+  leaf:{}, phyllotaxy:{}, density:{}, venation:{}, fill:{},
+  palette:{colour:"full"}
+};
+const LEAFY=["leaf","phyllotaxy","density","venation","fill"];
+
+function renderTraits(){
+  const key=state.catalogue;
+  const base=rollTraits(state.seed,state.locks);
+  const fix={...(CAT_NEEDS[key]||{})};
+  if(LEAFY.includes(key)&&(base.form==="grass"||base.form==="fern"))fix.form="foliage";
+  if(key!=="ground")fix.ground="none";        /* a pot is noise in a catalogue */
+  const items=Object.keys(TRAITS[key].opts).map(v=>({
+    seed:state.seed,
+    traits:{...base,...fix,[key]:v},
+    label:v,
+    sub:pctOf(key,v).toFixed(1)+"%"
+  }));
+  const cols=items.length<=4?items.length:items.length<=6?3:4;
+  renderGrid(items,{cols,captions:1,vary:0,turn:0,
+                    title:`CATALOGUE <b>${esc(TRAITS[key].label)}</b> \u00b7 ${items.length} variants`});
+  drawReadout(base);
+}
+
+/* clicking a cell: on a plate it opens that seed, in the catalogue it locks that variant */
 view.addEventListener("click",e=>{
-  if(state.view!=="plate")return;
+  if(state.view!=="plate"&&state.view!=="traits")return;
   const r=view.getBoundingClientRect();
   const x=(e.clientX-r.left)/r.width*LOGICAL, y=(e.clientY-r.top)/r.height*LOGICAL;
-  const hit=plateCells.find(c=>x>=c.x&&x<c.x+c.w&&y>=c.y&&y<c.y+c.h);
+  const hit=gridCells.find(c=>x>=c.x&&x<c.x+c.w&&y>=c.y&&y<c.y+c.h);
   if(!hit)return;
-  state.view="bench";
-  [...$("#tabs").children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.view==="bench"));
-  setSeed(hit.seed);
+  const goBench=()=>{
+    state.view="bench";
+    [...$("#tabs").children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.view==="bench"));
+  };
+  if(state.view==="traits"){
+    const k=state.catalogue, v=hit.item.label;
+    state.locks[k]=v;
+    if(selRefs[k]){selRefs[k].value=v;selRefs[k].classList.add("locked");}
+    goBench(); requestRender(false);
+  } else {
+    goBench(); setSeed(hit.item.seed);
+  }
 });
 
 function render(){
   if(state.view==="plate"){renderPlate();return;}
-  plateToken++;
+  if(state.view==="traits"){renderTraits();return;}
+  gridToken++;
   const t0=performance.now();
   const scale=previewMode?1:state.scale, W=LOGICAL*scale;
   view.width=W;view.height=W;
