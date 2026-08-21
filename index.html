@@ -127,7 +127,7 @@
       <div class="spacer"></div>
       <div class="seedbox">
         <label for="seed" style="color:var(--ink-3)">seed</label>
-        <input id="seed" type="text" inputmode="numeric" value="4929">
+        <input id="seed" type="text" inputmode="numeric" value="" aria-label="seed">
         <button id="prev">←</button><button id="next">→</button>
         <button id="reroll">Random</button>
       </div>
@@ -636,22 +636,26 @@ function rollTraits(seed,locks){
 /* ══════════════ 7. BUILD THE SPECIMEN ══════════════ */
 const tipI=c=>c.length-1;
 function buildPlant(traits,seed,pose){
-  const rnd=mulberry32(hashSeed(seed+"|geo"));
+  /* Every element draws from its OWN stream, keyed by what it is rather than by
+     when it was built. With a single sequential stream, adding one leaf shifted
+     every draw after it, so changing any trait re-rolled the whole specimen. */
+  const S=(...k)=>mulberry32(hashSeed(seed+"|"+k.join(":")));
+  const rnd=S("geo");
   const view=viewDirModel(pose);
   const across=screenRightModel(pose);
   const parts=[];                       /* {paths:[[v3]], fill:[v3]|null, tone:0..2} */
-  const add=(paths,fill,tone)=>parts.push({paths,fill:fill||null,tone:tone||0});
+  const add=(paths,fill,tone,key)=>parts.push({paths,fill:fill||null,tone:tone||0,key:key||("p"+parts.length)});
 
   const H=traits.habit==="rosette"?0.42:traits.habit==="creeping"?0.62:1;
   const stem=stemCurve(traits.habit,rnd,72).map(p=>vmul(p,H));
-  add([stem],null,0);
+  add([stem],null,0,"stem");
 
   /* thorns ride the stem */
   if(traits.quirk==="thorns"){
     for(let i=8;i<stem.length-4;i+=7){
       const f=frameAt(stem,i);
       const dir=vnorm(vadd(vmul(f.N,(i%14?1:-1)),vmul(f.T,0.5)));
-      add([[f.P,vadd(f.P,vmul(dir,0.055))]],null,0);
+      add([[f.P,vadd(f.P,vmul(dir,0.055))]],null,0,"thorn"+i);
     }
   }
 
@@ -660,18 +664,21 @@ function buildPlant(traits,seed,pose){
   if(form==="grass"||form==="fern"){
     parts.length=0;                                  /* these do not use the main axis */
     if(form==="grass"){
-      const n=6+Math.floor(rnd()*5), a0g=rnd()*Math.PI*2;
+      const gn=S("grass");
+      const n=6+Math.floor(gn()*5), a0g=gn()*Math.PI*2;
       for(let i=0;i<n;i++){
+        const rnd=S("blade",i);
         const a=a0g+(i/n)*Math.PI*2+(rnd()*2-1)*0.28;   /* radial, not a flat fan */
         const d=V(Math.cos(a),0,Math.sin(a));
         const r=0.20+rnd()*0.22, h=(0.55+rnd()*0.45)*H;
         const c=cubic3(V(0,0,0),vadd(vmul(d,r*0.25),V(0,h*0.52,0)),
                        vadd(vmul(d,r*0.85),V(0,h*0.94,0)),
                        vadd(vmul(d,r*1.5),V(0,h*0.78,0)),40);
-        add([taperedRibbon(c,across,t=>0.016*Math.pow(1-t,0.75)*(1-t*0.2))],null,1);
+        add([taperedRibbon(c,across,t=>0.016*Math.pow(1-t,0.75)*(1-t*0.2))],null,1,"blade"+i);
       }
-      const stalks=1+Math.floor(rnd()*2);
+      const stalks=1+Math.floor(gn()*2);
       for(let i=0;i<stalks;i++){
+        const rnd=S("culm",i);
         const la=rnd()*Math.PI*2, lr=0.04+rnd()*0.07, h=(0.86+rnd()*0.16)*H;
         const ld=V(Math.cos(la)*lr,0,Math.sin(la)*lr);
         const c=cubic3(V(0,0,0),vadd(vmul(ld,0.4),V(0,h*0.4,0)),vadd(vmul(ld,0.8),V(0,h*0.75,0)),vadd(ld,V(0,h,0)),34);
@@ -687,8 +694,9 @@ function buildPlant(traits,seed,pose){
         }
       }
     } else {
-      const nf=1+Math.floor(rnd()*2);
+      const nf=1+Math.floor(S("fern")()*2);
       for(let fi=0;fi<nf;fi++){
+        const rnd=S("frond",fi);
         const fa=rnd()*Math.PI*2, fr=(fi===0?0.04:0.20)+rnd()*0.08, h=(0.78+rnd()*0.22)*H;
         const fd=V(Math.cos(fa)*fr,0,Math.sin(fa)*fr);
         const rach=cubic3(V(0,0,0),vadd(vmul(fd,0.3),V(0,h*0.36,0)),
@@ -696,6 +704,7 @@ function buildPlant(traits,seed,pose){
         add([rach],null,0);
         const np=9+Math.floor(rnd()*5);
         for(let i=0;i<np;i++){
+          const rnd=S("pinna",fi,i);
           const t=0.14+(i/(np-1))*0.82, idx=Math.round(t*(rach.length-1));
           const f=frameAt(rach,idx);
           const env=Math.sin(Math.PI*Math.pow(t,0.72))*(1-t*0.25);
@@ -727,29 +736,31 @@ function buildPlant(traits,seed,pose){
   const basal=traits.phyllotaxy==="basal";
 
   const slots=[];
+  const sr=S("slots");
   const PHYLLO={alternate:2.3999,opposite:1.5708,whorled:1.0472,basal:0};
-  let azM=rnd()*Math.PI*2;
+  let azM=sr()*Math.PI*2;
   if(basal){
-    const n=4+Math.floor(rnd()*3);
+    const n=4+Math.floor(sr()*3);
     for(let i=0;i<n;i++){
-      slots.push({idx:Math.round((0.02+rnd()*0.05)*tipI(stem)),
-                  azModel:(i/n)*Math.PI*2+azM+(rnd()*2-1)*0.25,
-                  spread:0, elev:0.34+rnd()*0.42, shrink:0.82+rnd()*0.22});
+      slots.push({idx:Math.round((0.02+sr()*0.05)*tipI(stem)),
+                  azModel:(i/n)*Math.PI*2+azM+(sr()*2-1)*0.25,
+                  spread:0, elev:0.34+sr()*0.42, shrink:0.82+sr()*0.22});
     }
   } else {
     for(let i=0;i<nodeCount;i++){
       const idx=Math.round(((leafy?0.10:0.05)+(i/(nodeCount-1||1))*(leafy?0.80:0.30))*tipI(stem));
       const shrink=1-i/(nodeCount+1.6)*0.55;
-      const base=0.90+rnd()*0.32;
+      const base=0.90+sr()*0.32;
       for(let k=0;k<perNode;k++)
         slots.push({idx, azModel:azM+k*(Math.PI*2/perNode),
-                    spread:(rnd()*2-1)*0.22, elev:base+k*0.06+rnd()*0.10, shrink});
+                    spread:(sr()*2-1)*0.22, elev:base+k*0.06+sr()*0.10, shrink});
       azM+=PHYLLO[traits.phyllotaxy];
     }
   }
 
   const placed=[];
   slots.forEach((sl,ni)=>{
+    const rnd=S("leaf",ni);
     const f=frameAt(stem,sl.idx);
     /* The blade's azimuth is fixed to the plant, so turning the specimen really
        does rearrange it. It is then pulled part of the way toward whichever screen
@@ -802,7 +813,7 @@ function buildPlant(traits,seed,pose){
         });
       }
     }
-    add(paths,blade,1);
+    add(paths,blade,1,"leaf"+ni);
 
     if(traits.quirk==="tendrils"&&ni%2===0&&!basal){
       const t0=vadd(org,vmul(up,len*0.5)),coil=[];
@@ -820,6 +831,7 @@ function buildPlant(traits,seed,pose){
      childish default; real botanical doodles hang small florets off pedicels. */
   const tip=stem.length-1, heads=[];
   if(flowers){
+  const ir=S("infl");
   const pedicel=(idx,outDir,L,scale)=>{
     const f=frameAt(stem,idx);
     const dir=vnorm(vadd(vmul(f.N,outDir.n),vadd(vmul(f.B,outDir.b),vmul(f.T,outDir.t))));
@@ -829,25 +841,25 @@ function buildPlant(traits,seed,pose){
   };
   switch(traits.arrangement){
     case "spray":{
-      const n=3+Math.floor(rnd()*3);
+      const n=3+Math.floor(ir()*3);
       for(let i=0;i<n;i++){
         const idx=Math.round((0.76+(i/(n-1||1))*0.22)*tip);
-        pedicel(idx,{n:(i%2?1:-1)*(0.6+rnd()*0.5),b:(rnd()*2-1)*0.5,t:1.15+rnd()*0.5},(0.035+rnd()*0.055)*H,0.52+rnd()*0.16);
+        pedicel(idx,{n:(i%2?1:-1)*(0.6+ir()*0.5),b:(ir()*2-1)*0.5,t:1.15+ir()*0.5},(0.035+ir()*0.055)*H,0.52+ir()*0.16);
       }
       heads.push({pos:stem[tip],tan:frameAt(stem,tip).T,scale:0.62});
       break;}
     case "raceme":{
-      const n=9+Math.floor(rnd()*6);
+      const n=9+Math.floor(ir()*6);
       for(let i=0;i<n;i++){
         const idx=Math.round((0.58+(i/(n-1))*0.40)*tip);
-        pedicel(idx,{n:(i%2?1:-1)*1.0,b:(rnd()*2-1)*0.25,t:0.75},(0.016+rnd()*0.022)*H,0.24+rnd()*0.09);
+        pedicel(idx,{n:(i%2?1:-1)*1.0,b:(ir()*2-1)*0.25,t:0.75},(0.016+ir()*0.022)*H,0.24+ir()*0.09);
       }
       break;}
     case "corymb":{
-      const base=Math.round(0.82*tip), n=4+Math.floor(rnd()*4);
+      const base=Math.round(0.82*tip), n=4+Math.floor(ir()*4);
       for(let i=0;i<n;i++){
         const a=(i/(n-1||1)-0.5)*1.25;
-        pedicel(base,{n:Math.sin(a)*0.95,b:(rnd()*2-1)*0.45,t:Math.cos(a)*1.35},(0.05+rnd()*0.06)*H,0.38+rnd()*0.12);
+        pedicel(base,{n:Math.sin(a)*0.95,b:(ir()*2-1)*0.45,t:Math.cos(a)*1.35},(0.05+ir()*0.06)*H,0.38+ir()*0.12);
       }
       break;}
     default:
@@ -860,8 +872,9 @@ function buildPlant(traits,seed,pose){
 
   /* Berries: small round fruit on stubby stalks up the top half. */
   if(form==="berries"){
-    const n=6+Math.floor(rnd()*7);
+    const n=6+Math.floor(S("berries")()*7);
     for(let i=0;i<n;i++){
+      const rnd=S("berry",i);
       const idx=Math.round((0.42+(i/(n-1))*0.56)*tip), f=frameAt(stem,idx);
       const ab=i*2.3999+0.7;
       const p=vnorm(vadd(vmul(f.N,Math.cos(ab)),vmul(f.B,Math.sin(ab))));
@@ -871,12 +884,13 @@ function buildPlant(traits,seed,pose){
       const ring=[],sv=vnorm(vcross(dir,view));
       const uv=vnorm(vcross(sv,view));
       for(let q=0;q<=26;q++){const a=q/26*Math.PI*2;ring.push(vadd(c,vadd(vmul(sv,Math.cos(a)*r),vmul(uv,Math.sin(a)*r))));}
-      add([ring],ring,2);
+      add([ring],ring,2,"berry"+i);
     }
   }
 
   /* Seed head: a spindle of scales with bristles, no petals at all. */
   if(form==="seedhead"){
+    const rnd=S("seedhead");
     const f=frameAt(stem,tip), T=f.T, base=stem[tip];
     const L=(0.16+rnd()*0.09)*H;
     const ax=cubic3(base,vadd(base,vmul(T,L*0.34)),vadd(base,vmul(T,L*0.68)),vadd(base,vmul(T,L)),24);
@@ -908,6 +922,7 @@ function buildPlant(traits,seed,pose){
   /* flower heads */
   const petalN=PETAL_N[traits.petals];
   heads.forEach((h,hi)=>{
+    const rnd=S("head",hi);
     const pos=h.pos, tan=h.tan;
     /* face mostly toward the model's +Z so heads read frontally, but still rotate with the plant */
     const nrm=vnorm(vadd(vmul(tan,0.52),V(0,0.10,0.78)));
@@ -917,9 +932,9 @@ function buildPlant(traits,seed,pose){
     let up=vnorm(vcross(nrm,side));
     side=faceCamera(up,side,nrm,view,0.58);
     up=vnorm(vcross(vnorm(vcross(side,up)),side));
-    const S=(0.21+rnd()*0.06)*h.scale*H;
+    const HS=(0.21+rnd()*0.06)*h.scale*H;
     const head=h.bud?null:flowerHead(traits.flower,petalN,rnd);
-    const to3=(u,v)=>vadd(pos,vadd(vmul(side,u*S),vmul(up,v*S)));
+    const to3=(u,v)=>vadd(pos,vadd(vmul(side,u*HS),vmul(up,v*HS)));
 
     if(h.bud){                                   /* a closed teardrop, still on its way up */
       const b=[];
@@ -957,7 +972,7 @@ function buildPlant(traits,seed,pose){
     /* a petal that came loose and is on its way down */
     if(traits.quirk==="dropped"&&hi===0&&head.petals.length){
       const p=head.petals[0],fall=vadd(pos,V(0.20*H,-0.34*H,0.02));
-      const pts=p.pts.map(q=>vadd(fall,vadd(vmul(side,(q.u*0.9+q.v*0.4)*S),vmul(up,(q.v*0.5-q.u*0.8)*S))));
+      const pts=p.pts.map(q=>vadd(fall,vadd(vmul(side,(q.u*0.9+q.v*0.4)*HS),vmul(up,(q.v*0.5-q.u*0.8)*HS))));
       add([pts],pts,2);
     }
   });
@@ -967,8 +982,9 @@ function buildPlant(traits,seed,pose){
      rather than a diagram of one. */
   if(traits.habit==="clump"){
     const term=flowers;
-    const n=1+Math.floor(rnd()*2);
+    const n=1+Math.floor(S("clump")()*2);
     for(let i=0;i<n;i++){
+      const rnd=S("sister",i);
       const ca=rnd()*Math.PI*2, cr=0.10+rnd()*0.10, hh=(0.66+rnd()*0.22)*H;
       const cd=V(Math.cos(ca)*cr,0,Math.sin(ca)*cr);
       const sis=cubic3(V(0,0,0),vadd(vmul(cd,0.4),V(0,hh*0.34,0)),
@@ -983,6 +999,7 @@ function buildPlant(traits,seed,pose){
   }
   /* ground treatment */
   {
+    const rnd=S("ground");
     /* Ground is a solid in the world, not a decoration on the picture plane.
        Build it as real rings so it foreshortens with pitch and holds up at any yaw. */
     let nr=vsub(V(0,0,0),view);                        /* toward the camera */
@@ -1000,16 +1017,16 @@ function buildPlant(traits,seed,pose){
     };
     if(traits.ground==="soil"){
       const r=0.36, near=ring(r,0.004,0,Math.PI,30);
-      add([near.map((p,i)=>V(p.x,p.y+Math.sin(i*0.9)*0.006,p.z))],null,0);
+      add([near.map((p,i)=>V(p.x,p.y+Math.sin(i*0.9)*0.006,p.z))],null,0,"gnd0");
     } else if(traits.ground==="pot"){
       const w=0.30,b=w*0.72,d=0.30;
       const rimN=ring(w,0.02,0,Math.PI,26), rimF=ring(w,0.02,Math.PI,Math.PI*2,26);
       const baseN=ring(b,-d,0,Math.PI,26);
       const body=rimN.concat(baseN.slice().reverse());
-      add([body],body,1);
-      add([rimN],null,0); add([rimF],null,0); add([baseN],null,0);
+      add([body],body,1,"gnd0");
+      add([rimN],null,0,"gnd1"); add([rimF],null,0,"gnd2"); add([baseN],null,0,"gnd3");
       const lipN=ring(w*1.06,-0.055,0,Math.PI,26);
-      add([lipN,[rimN[0],lipN[0]],[rimN[rimN.length-1],lipN[lipN.length-1]]],null,0);
+      add([lipN,[rimN[0],lipN[0]],[rimN[rimN.length-1],lipN[lipN.length-1]]],null,0,"gnd4");
     } else if(traits.ground==="roots"){
       const n=5, a0r=rnd()*Math.PI*2;
       for(let i=0;i<n;i++){
@@ -1017,7 +1034,7 @@ function buildPlant(traits,seed,pose){
         const d2=V(Math.cos(a),0,Math.sin(a));
         add([cubic3(V(0,0,0),vadd(vmul(d2,L*0.35),V(0,-L*0.35,0)),
                     vadd(vmul(d2,L*0.75),V(0,-L*0.85,0)),
-                    vadd(vmul(d2,L*0.95),V(0,-L*1.15,0)),22)],null,0);
+                    vadd(vmul(d2,L*0.95),V(0,-L*1.15,0)),22)],null,0,"gnd"+i);
       }
     }
   }
@@ -1187,7 +1204,10 @@ function requestRender(preview){
 }
 
 function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
-  const rnd=mulberry32(hashSeed(state.seed+"|draw"));
+  /* Same fix on the render side: colour, interior fill and ink each get a stream
+     keyed to the part they belong to, so a brush tweak cannot reshuffle a
+     neighbouring stroke and a palette change cannot disturb the linework. */
+  const RS=(...k)=>mulberry32(hashSeed(state.seed+"|"+k.join(":")));
   const noise=makeNoise2D(mulberry32(hashSeed(state.seed+"|n")));
 
   /* Project at unit scale first, measure the silhouette, then fit it to the frame.
@@ -1203,7 +1223,7 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
       if(q.y<y0)y0=q.y; if(q.y>y1)y1=q.y;
     }));
     p.paths.forEach(path=>path.forEach(v=>{z+=v.z;n++;}));
-    return {paths,fill,tone:p.tone,z:n?z/n:0};
+    return {paths,fill,tone:p.tone,key:p.key,z:n?z/n:0};
   });
   const bw=Math.max(1e-3,x1-x0), bh=Math.max(1e-3,y1-y0);
   const S=Math.min(box.w/bw,box.h/bh)*box.zoom;
@@ -1223,7 +1243,7 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
   const flat=proj.map(p=>({
     paths:p.paths.map(path=>path.map(map)),
     fill:p.fill?p.fill.map(map):null,
-    tone:p.tone,z:p.z
+    tone:p.tone,key:p.key,z:p.z
   })).sort((a,b)=>a.z-b.z);
 
   /* colour first, flat and misregistered, so the ink lands on top of it */
@@ -1233,6 +1253,7 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
     flat.forEach(p=>{
       if(!p.fill)return;
       if(traits.colour==="accent"&&p.tone!==2)return;
+      const rnd=RS("col",p.key);
       const c=pal[p.tone%pal.length];
       ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`;
 
@@ -1266,6 +1287,7 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
       ctx.beginPath();ctx.moveTo(p.fill[0].x,p.fill[0].y);
       for(let i=1;i<p.fill.length;i++)ctx.lineTo(p.fill[i].x,p.fill[i].y);
       ctx.closePath();ctx.clip();
+      const rnd=RS("treat",p.key);
       const o={...B,overshoot:0,passes:1};
       /* below thumbnail size any interior treatment just fills the specimen in
          solid black, so step it down and finally drop it altogether */
@@ -1302,7 +1324,7 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
   }
 
   /* ink last */
-  flat.forEach(p=>p.paths.forEach(path=>{dotsRef.n+=strokePath(ctx,path,B,rnd,noise,rgb);}));
+  flat.forEach(p=>p.paths.forEach((path,j)=>{dotsRef.n+=strokePath(ctx,path,B,RS("ink",p.key,j),noise,rgb);}));
 }
 
 function render(){
@@ -1388,6 +1410,12 @@ addEventListener("keydown",e=>{
   if(e.key==="ArrowRight")$("#next").click();
   if(e.key==="ArrowLeft")$("#prev").click();
 });
+
+/* A fixed opening seed makes a generative program look like a static one.
+   Roll on load, but let ?seed= win so a specimen can still be linked to. */
+const urlSeed=new URLSearchParams(location.search).get("seed");
+state.seed=urlSeed!==null&&urlSeed!==""?urlSeed:String(Math.floor(Math.random()*10000));
+$("#seed").value=state.seed;
 
 paintChips();
 requestRender(false);
