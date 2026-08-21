@@ -660,18 +660,21 @@ function buildPlant(traits,seed,pose){
   if(form==="grass"||form==="fern"){
     parts.length=0;                                  /* these do not use the main axis */
     if(form==="grass"){
-      const n=5+Math.floor(rnd()*4);
+      const n=6+Math.floor(rnd()*5), a0g=rnd()*Math.PI*2;
       for(let i=0;i<n;i++){
-        const u=(i/(n-1||1))*2-1, out=u*(0.22+rnd()*0.20), h=(0.55+rnd()*0.45)*H;
-        const c=cubic3(V(0,0,0),V(out*0.25,h*0.52,(rnd()*2-1)*0.05),
-                       V(out*0.85,h*0.94,(rnd()*2-1)*0.05),
-                       V(out*1.5,h*0.80,(rnd()*2-1)*0.04),40);
+        const a=a0g+(i/n)*Math.PI*2+(rnd()*2-1)*0.28;   /* radial, not a flat fan */
+        const d=V(Math.cos(a),0,Math.sin(a));
+        const r=0.20+rnd()*0.22, h=(0.55+rnd()*0.45)*H;
+        const c=cubic3(V(0,0,0),vadd(vmul(d,r*0.25),V(0,h*0.52,0)),
+                       vadd(vmul(d,r*0.85),V(0,h*0.94,0)),
+                       vadd(vmul(d,r*1.5),V(0,h*0.78,0)),40);
         add([taperedRibbon(c,across,t=>0.016*Math.pow(1-t,0.75)*(1-t*0.2))],null,1);
       }
       const stalks=1+Math.floor(rnd()*2);
       for(let i=0;i<stalks;i++){
-        const lean=(rnd()*2-1)*0.10, h=(0.86+rnd()*0.16)*H;
-        const c=cubic3(V(0,0,0),V(lean*0.4,h*0.4,0),V(lean*0.8,h*0.75,0),V(lean,h,0),34);
+        const la=rnd()*Math.PI*2, lr=0.04+rnd()*0.07, h=(0.86+rnd()*0.16)*H;
+        const ld=V(Math.cos(la)*lr,0,Math.sin(la)*lr);
+        const c=cubic3(V(0,0,0),vadd(vmul(ld,0.4),V(0,h*0.4,0)),vadd(vmul(ld,0.8),V(0,h*0.75,0)),vadd(ld,V(0,h,0)),34);
         add([c],null,0);
         const top=c[c.length-1], T=vnorm(vsub(top,c[c.length-6]));
         const pl=cubic3(top,vadd(top,vmul(T,0.06*H)),vadd(top,vmul(T,0.13*H)),vadd(top,vmul(T,0.19*H)),18);
@@ -686,9 +689,10 @@ function buildPlant(traits,seed,pose){
     } else {
       const nf=1+Math.floor(rnd()*2);
       for(let fi=0;fi<nf;fi++){
-        const lean=(fi===0?0:(fi%2?1:-1)*0.22), h=(0.78+rnd()*0.22)*H;
-        const rach=cubic3(V(0,0,0),V(lean*0.3,h*0.36,(rnd()*2-1)*0.04),
-                          V(lean*0.85,h*0.72,(rnd()*2-1)*0.04),V(lean*1.2,h,0),56);
+        const fa=rnd()*Math.PI*2, fr=(fi===0?0.04:0.20)+rnd()*0.08, h=(0.78+rnd()*0.22)*H;
+        const fd=V(Math.cos(fa)*fr,0,Math.sin(fa)*fr);
+        const rach=cubic3(V(0,0,0),vadd(vmul(fd,0.3),V(0,h*0.36,0)),
+                          vadd(vmul(fd,0.85),V(0,h*0.72,0)),vadd(vmul(fd,1.2),V(0,h,0)),56);
         add([rach],null,0);
         const np=9+Math.floor(rnd()*5);
         for(let i=0;i<np;i++){
@@ -723,35 +727,39 @@ function buildPlant(traits,seed,pose){
   const basal=traits.phyllotaxy==="basal";
 
   const slots=[];
+  const PHYLLO={alternate:2.3999,opposite:1.5708,whorled:1.0472,basal:0};
+  let azM=rnd()*Math.PI*2;
   if(basal){
     const n=4+Math.floor(rnd()*3);
     for(let i=0;i<n;i++){
-      const u=(i/(n-1||1))*2-1;                       /* fan across the base */
       slots.push({idx:Math.round((0.02+rnd()*0.05)*tipI(stem)),
-                  side:u<0?-1:1, spread:u*0.85, elev:0.30+Math.abs(u)*0.55, shrink:1-Math.abs(u)*0.22});
+                  azModel:(i/n)*Math.PI*2+azM+(rnd()*2-1)*0.25,
+                  spread:0, elev:0.34+rnd()*0.42, shrink:0.82+rnd()*0.22});
     }
   } else {
     for(let i=0;i<nodeCount;i++){
       const idx=Math.round(((leafy?0.10:0.05)+(i/(nodeCount-1||1))*(leafy?0.80:0.30))*tipI(stem));
       const shrink=1-i/(nodeCount+1.6)*0.55;
-      if(perNode===1) slots.push({idx,side:i%2?1:-1,spread:(rnd()*2-1)*0.30,elev:0.92+rnd()*0.34,shrink});
-      else if(perNode===2){
-        slots.push({idx,side:-1,spread:(rnd()*2-1)*0.24,elev:0.90+rnd()*0.32,shrink});
-        slots.push({idx,side: 1,spread:(rnd()*2-1)*0.24,elev:0.90+rnd()*0.32,shrink});
-      } else {
-        [[-1,-0.42],[1,0.0],[-1,0.46]].forEach(([sd,sp],k)=>
-          slots.push({idx,side:sd,spread:sp+(rnd()*2-1)*0.16,elev:0.84+k*0.12+rnd()*0.18,shrink}));
-      }
+      const base=0.90+rnd()*0.32;
+      for(let k=0;k<perNode;k++)
+        slots.push({idx, azModel:azM+k*(Math.PI*2/perNode),
+                    spread:(rnd()*2-1)*0.22, elev:base+k*0.06+rnd()*0.10, shrink});
+      azM+=PHYLLO[traits.phyllotaxy];
     }
   }
 
   const placed=[];
   slots.forEach((sl,ni)=>{
     const f=frameAt(stem,sl.idx);
-    /* azimuth measured from the camera's across-axis, so blades never point at us */
+    /* The blade's azimuth is fixed to the plant, so turning the specimen really
+       does rearrange it. It is then pulled part of the way toward whichever screen
+       hemisphere is nearer — enough that nothing collapses edge-on, not so much
+       that the pose stops mattering. */
     const a0=Math.atan2(across.x*f.B.x+across.y*f.B.y+across.z*f.B.z,
                         across.x*f.N.x+across.y*f.N.y+across.z*f.N.z);
-    const a=a0+(sl.side<0?Math.PI:0)+sl.spread;
+    const wrap=d=>Math.atan2(Math.sin(d),Math.cos(d));
+    const dA=wrap(a0-sl.azModel), dB=wrap(a0+Math.PI-sl.azModel);
+    const a=sl.azModel+0.55*(Math.abs(dA)<Math.abs(dB)?dA:dB)+sl.spread;
     const outward=vnorm(vadd(vmul(f.N,Math.cos(a)),vmul(f.B,Math.sin(a))));
     const up=vnorm(vadd(vmul(outward,Math.cos(sl.elev)),vmul(f.T,Math.sin(sl.elev))));
     const nrm=vnorm(vsub(vmul(f.T,Math.cos(sl.elev)),vmul(outward,Math.sin(sl.elev))));
@@ -854,10 +862,10 @@ function buildPlant(traits,seed,pose){
   if(form==="berries"){
     const n=6+Math.floor(rnd()*7);
     for(let i=0;i<n;i++){
-      const idx=Math.round((0.42+(i/(n-1))*0.56)*tip), f=frameAt(stem,idx), sd=i%2?1:-1;
-      let p=vsub(across,vmul(f.T,across.x*f.T.x+across.y*f.T.y+across.z*f.T.z));
-      p=vlen(p)<1e-4?f.N:vnorm(p);
-      const dir=vnorm(vadd(vmul(p,sd*0.9),vmul(f.T,0.75)));
+      const idx=Math.round((0.42+(i/(n-1))*0.56)*tip), f=frameAt(stem,idx);
+      const ab=i*2.3999+0.7;
+      const p=vnorm(vadd(vmul(f.N,Math.cos(ab)),vmul(f.B,Math.sin(ab))));
+      const dir=vnorm(vadd(vmul(p,0.9),vmul(f.T,0.75)));
       const L=(0.030+rnd()*0.030)*H, c=vadd(f.P,vmul(dir,L)), r=(0.022+rnd()*0.014)*H;
       add([[f.P,c]],null,0);
       const ring=[],sv=vnorm(vcross(dir,view));
@@ -961,9 +969,10 @@ function buildPlant(traits,seed,pose){
     const term=flowers;
     const n=1+Math.floor(rnd()*2);
     for(let i=0;i<n;i++){
-      const lean=(i%2?1:-1)*(0.10+rnd()*0.10), hh=(0.66+rnd()*0.22)*H;
-      const sis=cubic3(V(0,0,0),V(lean*0.4,hh*0.34,(rnd()*2-1)*0.05),
-                       V(lean*0.9,hh*0.70,(rnd()*2-1)*0.05),V(lean*1.25,hh,(rnd()*2-1)*0.04),56);
+      const ca=rnd()*Math.PI*2, cr=0.10+rnd()*0.10, hh=(0.66+rnd()*0.22)*H;
+      const cd=V(Math.cos(ca)*cr,0,Math.sin(ca)*cr);
+      const sis=cubic3(V(0,0,0),vadd(vmul(cd,0.4),V(0,hh*0.34,0)),
+                       vadd(vmul(cd,0.9),V(0,hh*0.70,0)),vadd(vmul(cd,1.25),V(0,hh,0)),56);
       add([sis],null,0);
       if(term)heads.push({pos:sis[sis.length-1],
                   tan:vnorm(vsub(sis[sis.length-1],sis[sis.length-6])),
@@ -973,21 +982,43 @@ function buildPlant(traits,seed,pose){
 
   }
   /* ground treatment */
-  if(traits.ground==="soil"){
-    const line=[];
-    for(let i=0;i<=40;i++){const t=i/40;line.push(V(-0.34+t*0.68,0.004+Math.sin(t*7.3)*0.008,0));}
-    add([line],null,0);
-  } else if(traits.ground==="pot"){
-    const w=0.30,d=0.30;
-    add([[V(-w,0.02,0),V(-w*0.72,-d,0),V(w*0.72,-d,0),V(w,0.02,0),V(-w,0.02,0)]],
-        [V(-w,0.02,0),V(-w*0.72,-d,0),V(w*0.72,-d,0),V(w,0.02,0)],1);
-    add([[V(-w*1.10,0.02,0),V(w*1.10,0.02,0)],[V(-w*1.10,-0.07,0),V(w*1.10,-0.07,0)]],null,0);
-  } else if(traits.ground==="roots"){
-    for(let i=0;i<5;i++){
-      const a=-Math.PI/2+(i/4-0.5)*2.0, L=0.14+rnd()*0.16;
-      add([cubic3(V(0,0,0),V(Math.cos(a)*L*0.4,Math.sin(a)*L*0.4,0),
-                  V(Math.cos(a)*L*0.8,Math.sin(a)*L*0.9,0),
-                  V(Math.cos(a)*L,Math.sin(a)*L*1.2,0),22)],null,0);
+  {
+    /* Ground is a solid in the world, not a decoration on the picture plane.
+       Build it as real rings so it foreshortens with pitch and holds up at any yaw. */
+    let nr=vsub(V(0,0,0),view);                        /* toward the camera */
+    nr=vsub(nr,vmul(V(0,1,0),nr.y));
+    nr=vlen(nr)<1e-4?V(0,0,-1):vnorm(nr);
+    const ux=vnorm(vcross(V(0,1,0),nr));
+    const ring=(r,y,from,to,steps)=>{
+      const o=[];
+      for(let i=0;i<=steps;i++){
+        const th=from+(to-from)*(i/steps);
+        o.push(V(ux.x*Math.cos(th)*r+nr.x*Math.sin(th)*r, y,
+                 ux.z*Math.cos(th)*r+nr.z*Math.sin(th)*r));
+      }
+      return o;
+    };
+    if(traits.ground==="soil"){
+      const r=0.36, near=ring(r,0.004,0,Math.PI,30);
+      add([near.map((p,i)=>V(p.x,p.y+Math.sin(i*0.9)*0.006,p.z))],null,0);
+    } else if(traits.ground==="pot"){
+      const w=0.30,b=w*0.72,d=0.30;
+      const rimN=ring(w,0.02,0,Math.PI,26), rimF=ring(w,0.02,Math.PI,Math.PI*2,26);
+      const baseN=ring(b,-d,0,Math.PI,26);
+      const body=rimN.concat(baseN.slice().reverse());
+      add([body],body,1);
+      add([rimN],null,0); add([rimF],null,0); add([baseN],null,0);
+      const lipN=ring(w*1.06,-0.055,0,Math.PI,26);
+      add([lipN,[rimN[0],lipN[0]],[rimN[rimN.length-1],lipN[lipN.length-1]]],null,0);
+    } else if(traits.ground==="roots"){
+      const n=5, a0r=rnd()*Math.PI*2;
+      for(let i=0;i<n;i++){
+        const a=a0r+(i/n)*Math.PI*2+(rnd()*2-1)*0.3, L=0.14+rnd()*0.16;
+        const d2=V(Math.cos(a),0,Math.sin(a));
+        add([cubic3(V(0,0,0),vadd(vmul(d2,L*0.35),V(0,-L*0.35,0)),
+                    vadd(vmul(d2,L*0.75),V(0,-L*0.85,0)),
+                    vadd(vmul(d2,L*0.95),V(0,-L*1.15,0)),22)],null,0);
+      }
     }
   }
   return parts;
