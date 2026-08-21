@@ -278,6 +278,59 @@ function strokePath(ctx,pts,o,rnd,noise,rgb){
   return dots;
 }
 
+/* ── colour shapes ──────────────────────────────────────────────────
+   A fill is not the outline shifted over. It is a second, clumsier drawing of
+   the same thing: corners rounded off, edges lumpy at three scales, lumpier in
+   some stretches than others, and soft where the medium ran out. */
+function polyCentroid(p){let x=0,y=0;for(const q of p){x+=q.x;y+=q.y;}return{x:x/p.length,y:y/p.length};}
+function polySize(p){
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  for(const q of p){if(q.x<x0)x0=q.x;if(q.x>x1)x1=q.x;if(q.y<y0)y0=q.y;if(q.y>y1)y1=q.y;}
+  return Math.max(1,Math.hypot(x1-x0,y1-y0));
+}
+function smoothClosed(p,iters){
+  const n=p.length;
+  for(let it=0;it<iters;it++){
+    const out=new Array(n);
+    for(let i=0;i<n;i++){
+      const a=p[(i-1+n)%n],b=p[(i+1)%n],q=p[i];
+      out[i]={x:(a.x+q.x*2+b.x)/4,y:(a.y+q.y*2+b.y)/4};
+    }
+    p=out;
+  }
+  return p;
+}
+function doodleFill(pts,rnd,noise,strength,spread){
+  const sp=spread===undefined?1:spread;
+  const size=polySize(pts);
+  let p=resample(pts,Math.max(1.5,size*0.018));
+  if(p.length<6)return pts;
+  p=smoothClosed(p,8);                       /* a coloured-in shape has no sharp tips */
+  const c=polyCentroid(p);
+  const sx=1+(rnd()*2-1)*0.085*sp, sy=1+(rnd()*2-1)*0.075*sp;
+  const ox=(rnd()*2-1)*size*0.034*sp, oy=(rnd()*2-1)*size*0.034*sp;
+  p=p.map(q=>({x:c.x+(q.x-c.x)*sx+ox, y:c.y+(q.y-c.y)*sy+oy}));
+
+  const n=p.length,out=new Array(n),off=rnd()*300;
+  const amp=size*0.058*strength;
+  const f1=1.7/size, f2=5.5/size, f3=15/size, fm=2.9/size;
+  for(let i=0;i<n;i++){
+    const a=p[(i-1+n)%n],b=p[(i+1)%n];
+    let tx=b.x-a.x,ty=b.y-a.y;const L=Math.hypot(tx,ty)||1;tx/=L;ty/=L;
+    const mod=0.28+0.72*Math.abs(noise(p[i].x*fm+off,p[i].y*fm+off));
+    const d=(noise(p[i].x*f1+off,p[i].y*f1+off)*0.58
+            +noise(p[i].x*f2+off*2.3,p[i].y*f2+off*2.3)*0.30
+            +noise(p[i].x*f3+off*5.1,p[i].y*f3+off*5.1)*0.12)*amp*mod;
+    out[i]={x:p[i].x-ty*d,y:p[i].y+tx*d};
+  }
+  return smoothClosed(out,1);
+}
+function tracePoly(ctx,p){
+  ctx.beginPath();ctx.moveTo(p[0].x,p[0].y);
+  for(let i=1;i<p.length;i++)ctx.lineTo(p[i].x,p[i].y);
+  ctx.closePath();
+}
+
 /* ══════════════ 3. PAPER ══════════════ */
 function makePaper(w,h,cfg,seed){
   const cv=document.createElement("canvas");cv.width=w;cv.height=h;
@@ -930,14 +983,24 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
       if(!p.fill)return;
       if(traits.colour==="accent"&&p.tone!==2)return;
       const c=pal[p.tone%pal.length];
-      const off={x:(rnd()*2-1)*3.2*k,y:(rnd()*2-1)*3.2*k};
-      const shifted=p.fill.map(q=>({x:q.x+off.x,y:q.y+off.y}));
-      const w=wobblePath(shifted,3.0*k,0.9,noise,rnd()*400);
-      ctx.globalAlpha=0.80;
       ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`;
-      ctx.beginPath();ctx.moveTo(w[0].x,w[0].y);
-      for(let i=1;i<w.length;i++)ctx.lineTo(w[i].x,w[i].y);
-      ctx.closePath();ctx.fill();
+
+      const blob=doodleFill(p.fill,rnd,noise,1);
+      ctx.globalAlpha=0.66;
+      tracePoly(ctx,blob);ctx.fill();
+
+      /* a second, sloppier coat — where the two overlap the colour sits denser,
+         the way a marker gone over twice does */
+      ctx.globalAlpha=0.24;
+      tracePoly(ctx,doodleFill(p.fill,rnd,noise,1.45,0.3));ctx.fill();
+
+      /* break the vector edge with the same grain the ink uses */
+      ctx.globalAlpha=1;
+      dotsRef.n+=strokePath(ctx,blob,{
+        ...B,alpha:0.10,density:Math.max(3,Math.round(B.density*0.45)),
+        minThickness:1.0*k,maxThickness:3.6*k,taper:0,passes:1,overshoot:0,
+        wobble:0,toneJitter:8
+      },rnd,noise,c);
     });
     ctx.restore();
   }
@@ -953,25 +1016,27 @@ function drawSpecimen(ctx,traits,parts,pose,box,rgb,dotsRef){
       for(let i=1;i<p.fill.length;i++)ctx.lineTo(p.fill[i].x,p.fill[i].y);
       ctx.closePath();ctx.clip();
       const o={...B,overshoot:0,passes:1};
-      if(traits.fill==="hatch"){
+      const treat=(traits.fill==="solid"&&k<0.62)?"hatch":traits.fill;
+      if(k<0.62)o.alpha=Math.max(0.05,o.alpha*0.7);
+      if(treat==="hatch"){
         const step=Math.max(5,(xe-xs)/9);
         for(let x=xs-(ye-ys);x<xe+(ye-ys);x+=step)
           dotsRef.n+=strokePath(ctx,[{x,y:ys},{x:x+(ye-ys),y:ye}],o,rnd,noise,rgb);
-      } else if(traits.fill==="scribble"){
+      } else if(treat==="scribble"){
         const pts=[];const n=54;
         for(let i=0;i<=n;i++){
           const t=i/n;
           pts.push({x:xs+t*(xe-xs),y:ys+(ye-ys)*(0.5+0.44*Math.sin(t*Math.PI*9))});
         }
         dotsRef.n+=strokePath(ctx,pts,o,rnd,noise,rgb);
-      } else if(traits.fill==="stipple"){
+      } else if(treat==="stipple"){
         ctx.fillStyle=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},${Math.min(1,o.alpha*1.6)})`;
         const n=Math.min(700,Math.round((xe-xs)*(ye-ys)/26));
         for(let i=0;i<n;i++){
           const x=xs+rnd()*(xe-xs),y=ys+rnd()*(ye-ys),r=o.minRadius+rnd()*(o.maxRadius-o.minRadius);
           ctx.beginPath();ctx.arc(x,y,r,0,6.2831853);ctx.fill();dotsRef.n++;
         }
-      } else if(traits.fill==="solid"){
+      } else if(treat==="solid"){
         const so={...o,taper:0,wobble:1.2*k,spacing:Math.max(1.4,o.spacing*1.6),
                   density:Math.max(2,Math.round(o.density*0.5)),alpha:Math.min(1,o.alpha*1.5)};
         const step=Math.max(2.4,o.maxThickness*0.95);
