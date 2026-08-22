@@ -721,7 +721,12 @@ function buildPlant(traits,seed,pose){
       const mid=vadd(f.P,vadd(vmul(out,len*0.62),vmul(f.T,-len*hook*0.22)));
       const bL=vadd(f.P,vmul(f.T,base));       /* two base corners along the stem */
       const bR=vadd(f.P,vmul(f.T,-base));
-      add([[bL,mid,tip,mid,bR]],[bL,mid,tip,mid,bR],0,"thorn"+k);
+      /* Colour picks up any part with a fill, and a thorn's pointed silhouette
+         reads as a little coloured flag or bud once washed — undermining the
+         sharp, woody character just built for it. A real thorn stays the stem's
+         own dull colour regardless of what the flowers look like, so it keeps
+         its outline for the brush's taper but carries no fill to colour. */
+      add([[bL,mid,tip,mid,bR]],null,0,"thorn"+k);
     }
   }
 
@@ -897,7 +902,12 @@ function buildPlant(traits,seed,pose){
     let org,cen;
     let tries=0;
     for(;;){
-      org=vadd(f.P,vmul(up,len*(basal?0.10:0.26)));
+      /* Petiole length was decided by the phyllotaxy TRAIT ("basal"), not by
+         whether this plant is actually a rosette — so a rosette whose phyllotaxy
+         happened to roll "opposite" got the long, normal-stem petiole ratio
+         instead of the short one. That's why leaves floated above a burst of
+         bare straight sticks instead of emerging from the crown. */
+      org=vadd(f.P,vmul(up,len*((basal||sl.rosette)?0.10:0.26)));
       cen=vadd(org,vmul(up,len*0.5));
       const r=len*Math.max(0.40,maxHW*1.15);
       if(sl.rosette){placed.push({c:cen,r});break;}   /* spacing is the spiral's job */
@@ -1174,7 +1184,11 @@ function buildPlant(traits,seed,pose){
       const angles=[]; let a0r=rnd()*Math.PI*2;
       for(let i=0;i<n;i++){ a0r+=(Math.PI*2/n)*(0.55+rnd()*0.9); angles.push(a0r); }
       angles.forEach((a,i)=>{
-        const L=0.11+rnd()*0.20, wander=(rnd()*2-1)*0.5;
+        /* Root length was a flat constant, never scaled by H like every other
+           part of the plant. A rosette built at H≈0.4 still grew roots sized for
+           a full-height H=1 plant, so they towered over the leaf cluster instead
+           of belonging to it. */
+        const L=(0.11+rnd()*0.20)*H, wander=(rnd()*2-1)*0.5;
         const d2=V(Math.cos(a),0,Math.sin(a));
         const perp=V(-Math.sin(a),0,Math.cos(a));
         const root=cubic3(V(0,0,0),
