@@ -811,7 +811,15 @@ function buildPlant(traits,seed,pose){
   const PHYLLO={alternate:2.3999,opposite:1.5708,whorled:1.0472,basal:0};
   let azM=sr()*Math.PI*2;
   if(ROSETTE||basal){
-    const n=ROSETTE?Math.max(5,Math.min(11,Math.round(Math.PI*1.15/Math.atan(maxHW)+sr()*2-1)))
+    /* A round blade's footprint isn't just its angular width — it's round in
+       every direction, so simple wedge math undercounts how much room it eats
+       compared to a blade of the same half-width that tapers to a point. Blades
+       close to circular (aspect near 1:1) get an extra count reduction so they
+       read as a handful of big rounded leaves, like a real echeveria, rather
+       than a packed ring of overlapping coins. */
+    const tipHW=prof(0.92), roundness=Math.min(1,tipHW/(maxHW||1e-4));
+    const countK=1-roundness*0.62;
+    const n=ROSETTE?Math.max(4,Math.min(11,Math.round(Math.PI*1.15/Math.atan(maxHW)*countK+sr()*2-1)))
                    :4+Math.floor(sr()*3);
     for(let i=0;i<n;i++){
       const az=azM+i*2.3999;                       /* golden-angle spiral */
@@ -820,7 +828,17 @@ function buildPlant(traits,seed,pose){
       const ov=Math.abs(Math.cos(az)*view.x+Math.sin(az)*view.z);
       slots.push({idx:Math.round((0.005+sr()*0.02)*tipI(stem)),
                   azModel:az, spread:0, rosette:ROSETTE,
-                  elev:planView?Math.max(0.12,Math.min(0.55,0.95-planTilt))+sr()*0.12
+                  /* The old version reduced elevation by however much planTilt would
+                     later add back, on the theory the two would sum to a constant
+                     viewing angle. That's only true for the one leaf that happens to
+                     sit on the tilt axis — planTilt rotates the WHOLE rosette about a
+                     single horizontal axis, but each leaf's own elevation lifts it
+                     about its own azimuth's axis, a different axis for every leaf
+                     around the circle. Compensating per-leaf for a rotation that
+                     doesn't act along the leaf's own axis just squashed the cone flat.
+                     A plan-view rosette now gets one fixed, modest lift — natural
+                     droop, nothing more — and planTilt alone does the leaning back. */
+                  elev:planView?0.26+sr()*0.14
                         :((ROSETTE?0.40:0.34)+ov*0.52+sr()*0.16),
                   shrink:(ROSETTE?1.15:0.82)+sr()*0.22});
     }
@@ -852,7 +870,15 @@ function buildPlant(traits,seed,pose){
     const outward=vnorm(vadd(vmul(f.N,Math.cos(a)),vmul(f.B,Math.sin(a))));
     const up=vnorm(vadd(vmul(outward,Math.cos(sl.elev)),vmul(f.T,Math.sin(sl.elev))));
     const nrm=vnorm(vsub(vmul(f.T,Math.cos(sl.elev)),vmul(outward,Math.sin(sl.elev))));
-    const side=faceCamera(up,vnorm(vcross(up,nrm)),nrm,view,0.62);
+    /* faceCamera fights edge-on collapse by rotating each blade's face toward
+       the camera. For a plan-tilted rosette that is the wrong tool: the WHOLE
+       assembly is about to lean toward the viewer as one rigid tilt, so correcting
+       every individual leaf on top of that as well over-rotates the far-side
+       leaves until they mirror the near-side ones — a symmetric flat fan instead
+       of a spiral. The more the plant leans back, the less each leaf needs its
+       own correction. */
+    const fcBlend=sl.rosette?Math.max(0.06,0.62*(1-planTilt)):0.62;
+    const side=faceCamera(up,vnorm(vcross(up,nrm)),nrm,view,fcBlend);
 
     /* a fat blade has to be shorter or the rosette closes into a flower shape */
     const wide=Math.max(0.55,Math.min(1.35,0.30/maxHW));
@@ -913,34 +939,53 @@ function buildPlant(traits,seed,pose){
   const tip=stem.length-1, heads=[];
   if(flowers){
   const ir=S("infl");
+  /* A raceme/spray/corymb is many florets along one run of stem. If each one takes
+     its "outward" direction from the stem's OWN local frame, a twisting habit like
+     climbing spins that frame through a full turn over the run — so consecutive
+     florets fire off in unrelated compass directions instead of forming one
+     coherent spike. Fix the outward reference once, at the middle of the run, and
+     every floret in this inflorescence uses that same compass bearing. Only the
+     attachment point (f.P) still comes from each floret's own place on the stem. */
+  const f0=frameAt(stem,Math.round(tip*0.5));
   const pedicel=(idx,outDir,L,scale)=>{
     const f=frameAt(stem,idx);
-    const dir=vnorm(vadd(vmul(f.N,outDir.n),vadd(vmul(f.B,outDir.b),vmul(f.T,outDir.t))));
+    const dir=vnorm(vadd(vmul(f0.N,outDir.n),vadd(vmul(f0.B,outDir.b),vmul(f0.T,outDir.t))));
     const end=vadd(f.P,vmul(dir,L));
-    add([cubic3(f.P,vadd(f.P,vmul(dir,L*0.45)),vadd(end,vmul(f.T,-L*0.30)),end,18)],null,0);
+    add([cubic3(f.P,vadd(f.P,vmul(dir,L*0.45)),vadd(end,vmul(f0.T,-L*0.30)),end,18)],null,0);
     heads.push({pos:end,tan:dir,scale});
   };
+  /* A floret's own radius is roughly 0.24*scale*H (see HS below). If the pedicel
+     carrying it is shorter than that, the florets pile into an unreadable ball —
+     this was happening on every habit, not just creeping. Pedicel length is now
+     derived FROM the scale, with enough clearance that heads stay separate. */
+  const stalk=(scale,mul)=>(mul[0]+ir()*mul[1])*scale*H;
   switch(traits.arrangement){
     case "spray":{
       const n=3+Math.floor(ir()*3);
       for(let i=0;i<n;i++){
         const idx=Math.round((0.76+(i/(n-1||1))*0.22)*tip);
-        pedicel(idx,{n:(i%2?1:-1)*(0.6+ir()*0.5),b:(ir()*2-1)*0.5,t:1.15+ir()*0.5},(0.035+ir()*0.055)*H,0.52+ir()*0.16);
+        const sc=0.42+ir()*0.14;
+        pedicel(idx,{n:(i%2?1:-1)*(0.6+ir()*0.5),b:(ir()*2-1)*0.5,t:1.15+ir()*0.5},stalk(sc,[1.0,0.55]),sc);
       }
-      heads.push({pos:stem[tip],tan:frameAt(stem,tip).T,scale:0.62});
+      heads.push({pos:stem[tip],tan:frameAt(stem,tip).T,scale:0.5});
       break;}
     case "raceme":{
-      const n=9+Math.floor(ir()*6);
+      const n=7+Math.floor(ir()*5);                    /* fewer, so along-stem spacing survives */
       for(let i=0;i<n;i++){
-        const idx=Math.round((0.58+(i/(n-1))*0.40)*tip);
-        pedicel(idx,{n:(i%2?1:-1)*1.0,b:(ir()*2-1)*0.25,t:0.75},(0.016+ir()*0.022)*H,0.24+ir()*0.09);
+        const idx=Math.round((0.50+(i/(n-1))*0.48)*tip);  /* spread over more of the stem */
+        const sc=0.20+ir()*0.08;
+        pedicel(idx,{n:(i%2?1:-1)*1.0,b:(ir()*2-1)*0.25,t:0.75},stalk(sc,[1.1,0.6]),sc);
       }
       break;}
     case "corymb":{
       const base=Math.round(0.82*tip), n=4+Math.floor(ir()*4);
       for(let i=0;i<n;i++){
         const a=(i/(n-1||1)-0.5)*1.25;
-        pedicel(base,{n:Math.sin(a)*0.95,b:(ir()*2-1)*0.45,t:Math.cos(a)*1.35},(0.05+ir()*0.06)*H,0.38+ir()*0.12);
+        const sc=0.30+ir()*0.10;
+        /* outer stalks run a little longer than inner ones, the flat-topped
+           silhouette a real corymb has */
+        const L=stalk(sc,[0.95,0.5])*(1+Math.abs(Math.sin(a))*0.35);
+        pedicel(base,{n:Math.sin(a)*0.95,b:(ir()*2-1)*0.45,t:Math.cos(a)*1.35},L,sc);
       }
       break;}
     default:
