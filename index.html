@@ -703,14 +703,25 @@ function buildPlant(traits,seed,pose){
      stepping by 7 from 8, which never lands on zero — so every thorn went the
      same way. Count them instead of testing the index. */
   if(traits.quirk==="thorns"){
+    /* A bare line reads as a twig, not a spike — nothing about a single stroke
+       says "sharp." A thorn is a small closed wedge: wide where it meets the
+       stem, tapering hard to a point, and curved back toward the stem the way
+       a rose or acacia thorn hooks rather than sticking out straight. Drawing
+       it as a filled outline lets the brush render a real taper instead of a
+       uniform-width hairline. */
     const tr=S("thorns");
     let k=0;
     for(let i=8;i<stem.length-4;i+=7,k++){
       const f=frameAt(stem,i);
       const side=k%2?1:-1;
-      const dir=vnorm(vadd(vmul(f.N,side*0.95),
-                      vadd(vmul(f.B,side*(tr()*0.5-0.25)),vmul(f.T,0.42+tr()*0.22))));
-      add([[f.P,vadd(f.P,vmul(dir,0.048+tr()*0.022))]],null,0,"thorn"+k);
+      const out=vnorm(vadd(vmul(f.N,side*0.95),vmul(f.B,side*(tr()*0.5-0.25))));
+      const len=0.052+tr()*0.026, base=0.011+tr()*0.006;
+      const hook=0.55+tr()*0.35;              /* how hard it curves back */
+      const tip=vadd(f.P,vadd(vmul(out,len),vmul(f.T,-len*hook*0.7)));
+      const mid=vadd(f.P,vadd(vmul(out,len*0.62),vmul(f.T,-len*hook*0.22)));
+      const bL=vadd(f.P,vmul(f.T,base));       /* two base corners along the stem */
+      const bR=vadd(f.P,vmul(f.T,-base));
+      add([[bL,mid,tip,mid,bR]],[bL,mid,tip,mid,bR],0,"thorn"+k);
     }
   }
 
@@ -1155,14 +1166,32 @@ function buildPlant(traits,seed,pose){
       const lipN=ring(w*1.06,-0.055,0,Math.PI,26);
       add([lipN,[rimN[0],lipN[0]],[rimN[rimN.length-1],lipN[lipN.length-1]]],null,0,"gnd4");
     } else if(traits.ground==="roots"){
-      const n=5, a0r=rnd()*Math.PI*2;
-      for(let i=0;i<n;i++){
-        const a=a0r+(i/n)*Math.PI*2+(rnd()*2-1)*0.3, L=0.14+rnd()*0.16;
+      /* Evenly-spaced straight spokes from one point read as a drawn star, not
+         a root ball. Real roots fork at uneven intervals, wander instead of
+         running straight, taper as they thin out, and rarely all reach the
+         same length. */
+      const n=4+Math.floor(rnd()*4);
+      const angles=[]; let a0r=rnd()*Math.PI*2;
+      for(let i=0;i<n;i++){ a0r+=(Math.PI*2/n)*(0.55+rnd()*0.9); angles.push(a0r); }
+      angles.forEach((a,i)=>{
+        const L=0.11+rnd()*0.20, wander=(rnd()*2-1)*0.5;
         const d2=V(Math.cos(a),0,Math.sin(a));
-        add([cubic3(V(0,0,0),vadd(vmul(d2,L*0.35),V(0,-L*0.35,0)),
-                    vadd(vmul(d2,L*0.75),V(0,-L*0.85,0)),
-                    vadd(vmul(d2,L*0.95),V(0,-L*1.15,0)),22)],null,0,"gnd"+i);
-      }
+        const perp=V(-Math.sin(a),0,Math.cos(a));
+        const root=cubic3(V(0,0,0),
+          vadd(vadd(vmul(d2,L*0.30),vmul(perp,L*wander*0.25)),V(0,-L*0.30,0)),
+          vadd(vadd(vmul(d2,L*0.68),vmul(perp,L*wander*0.55)),V(0,-L*0.82,0)),
+          vadd(vadd(vmul(d2,L*0.92),vmul(perp,L*wander*0.70)),V(0,-L*1.15,0)),22);
+        const taper=taperedRibbon(root,across,t=>0.006*Math.pow(1-t,0.8)+0.0015);
+        add([taper],taper,0,"gnd"+i);
+        if(rnd()<0.45){                        /* an occasional forking rootlet */
+          const bi=10+Math.floor(rnd()*8);
+          const bp=root[bi], bd=vnorm(vadd(vmul(d2,0.5+rnd()*0.4),vmul(perp,(rnd()*2-1)*0.7)));
+          const bL=L*(0.25+rnd()*0.25);
+          const branch=cubic3(bp,vadd(bp,vmul(bd,bL*0.4)),vadd(bp,vmul(bd,bL*0.75)),
+                              vadd(bp,vadd(vmul(bd,bL),V(0,-bL*0.4,0))),14);
+          add([taperedRibbon(branch,across,t=>0.004*Math.pow(1-t,0.8)+0.0012)],null,0,"gnd"+i+"b");
+        }
+      });
     }
   }
   if(planTilt>0.02){
